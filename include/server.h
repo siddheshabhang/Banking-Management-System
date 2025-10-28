@@ -49,8 +49,8 @@ typedef enum {
  * Generic status flags
  */
 typedef enum {
-    STATUS_ACTIVE = 1,
-    STATUS_INACTIVE = 0
+    STATUS_INACTIVE = 0,
+    STATUS_ACTIVE = 1
 } status_t;
 
 /*

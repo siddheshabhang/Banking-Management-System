@@ -2,68 +2,49 @@
 #define UTILS_H
 
 #include <stdint.h>
+#include <stddef.h>
 #include <unistd.h>
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <fcntl.h>
-#include <pthread.h>
-#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
 
-/*
- * Utilities for file-backed record storage and locking.
- *
- * Note: These helpers provide an initial safe interface; you will refine
- * them to implement ACID-like properties: use POSIX advisory locks (fcntl),
- * atomic renames for writes, journaling if desired, and careful concurrency.
- */
+// Include server.h to access the globally defined structs
+#include "server.h"
 
-/* Open file for read/write creating if necessary (returns fd or -1) */
-int open_db_file(const char *path, int flags, mode_t mode);
+// --- File Locking ---
+int lock_file(int fd);
+int unlock_file(int fd);
 
-/* Acquire an advisory lock on a file descriptor.
- * - exclusive == 1 for write lock, 0 for shared/read lock
- * - blocking == 1 to block until lock obtained, 0 to return immediately
- * Returns 0 on success, -1 on failure (errno set).
- */
-int fd_lock(int fd, int exclusive, int blocking);
+// --- User Persistence (using user_rec_t) ---
+int write_user(user_rec_t *user);
+int read_user(int userId, user_rec_t *user);
+int generate_new_userId();
 
-/* Release advisory lock */
-int fd_unlock(int fd);
+// --- Account Persistence (using account_rec_t) ---
+int write_account(account_rec_t *acc);
+int read_account(int userId, account_rec_t *acc);
 
-/* Helper to write a complete buffer to fd (handles partial writes) */
-ssize_t write_all(int fd, const void *buf, size_t count);
+// --- Transaction Persistence (using txn_rec_t) ---
+int append_transaction(txn_rec_t *tx);
 
-/* Helper to read an exact count from fd, handling partial reads.
- * Returns number of bytes read (==count) or -1 on error, 0 on EOF.
- */
-ssize_t read_all(int fd, void *buf, size_t count);
+// --- Loan Persistence (using loan_rec_t) ---
+int read_loan(uint64_t loanId, loan_rec_t *loan);
+int write_loan(loan_rec_t *loan);
+int append_loan(loan_rec_t *loan); // Added for new loan applications
 
-/* Helpers to allocate monotonic unique IDs (thread-safe).
- * You can implement them by reading/writing a simple counter file or by
- * using time + randomness for initial versions.
- */
-uint64_t generate_unique_id(const char *counter_file);
+// --- Feedback Persistence (using feedback_rec_t) ---
+int append_feedback(feedback_rec_t *fb);
+int write_feedback(feedback_rec_t *fb);
+int read_feedback(uint64_t fbId, feedback_rec_t *fb);
 
-/* Password hashing helpers (implementations may use a library or simple SHA256).
- * - hash_password: produce a text representation of the hash into out_hash (size must be >= MAX_PASSWORD_LEN)
- * - verify_password: checks plain password against stored hash.
- * For project use you can implement a simple salted SHA256 using OpenSSL or
- * fallback to a simple custom hash (not for production).
- */
-int hash_password(const char *password, const char *salt, char *out_hash, size_t out_sz);
-int verify_password(const char *password, const char *salt, const char *stored_hash);
+// --- Security & Auth (CRITICAL FIX: Hashing) ---
+int login_user(const char *username, const char *password, int *userId, char *role, size_t role_sz);
+void generate_password_hash(const char *password, char *hash_output, size_t hash_size);
+int verify_password(const char *password, const char *hash);
 
-/* Convenience: safe string copy that zero-terminates */
-void safe_strncpy(char *dst, const char *src, size_t dst_sz);
+// --- Concurrency FIX: Atomic Read-Modify-Write for Account ---
+// This function holds the lock across the entire read/write cycle for safety.
+int atomic_update_account(int userId, int (*modifier)(account_rec_t *acc, void *data), void *modifier_data);
 
-/* Helper to ensure directory exists (recursively if needed) */
-int mkdir_p(const char *path);
-
-/* Logging helper (thread-safe) */
-void log_info(const char *fmt, ...);
-void log_error(const char *fmt, ...);
-
-#endif /* UTILS_H */
+#endif

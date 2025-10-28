@@ -1,163 +1,526 @@
-/*
- * src/client.c
- * Simple interactive client for the Banking Management System
- * Compatible with macOS (POSIX sockets)
- */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include "client.h"
+#include "server.h" // For request_t, response_t, and constants
 
-#include "include/client.h"
-#include "include/utils.h"
-
-/* ---------- client_connect ---------- */
-int client_connect(client_app_ctx_t *ctx, const char *server_ip, int port) {
-    if (!ctx) return -1;
-    memset(ctx, 0, sizeof(*ctx));
-
-    ctx->sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (ctx->sockfd < 0) {
-        perror("socket");
-        return -1;
+// Helper to send request and get response
+// CRITICAL FIX: This now sends/receives the correct structs
+void send_request_and_get_response(int sockfd, request_t *req, response_t *resp) {
+    if (write(sockfd, req, sizeof(request_t)) <= 0) {
+        perror("write");
+        snprintf(resp->message, sizeof(resp->message), "Connection to server lost (write).");
+        resp->status_code = -1;
+        return;
     }
-
-    struct sockaddr_in servaddr;
-    memset(&servaddr, 0, sizeof(servaddr));
-    servaddr.sin_family = AF_INET;
-    servaddr.sin_port = htons(port);
-    if (inet_pton(AF_INET, server_ip, &servaddr.sin_addr) <= 0) {
-        perror("inet_pton");
-        close(ctx->sockfd);
-        return -1;
+    
+    if (read(sockfd, resp, sizeof(response_t)) <= 0) {
+        perror("read");
+        snprintf(resp->message, sizeof(resp->message), "Connection to server lost (read).");
+        resp->status_code = -1;
+        return;
     }
-
-    if (connect(ctx->sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
-        perror("connect");
-        close(ctx->sockfd);
-        return -1;
-    }
-
-    strncpy(ctx->server_ip, server_ip, sizeof(ctx->server_ip) - 1);
-    ctx->server_port = port;
-    log_info("Connected to server %s:%d", ctx->server_ip, ctx->server_port);
-    return 0;
 }
 
-/* ---------- client_disconnect ---------- */
-void client_disconnect(client_app_ctx_t *ctx) {
-    if (!ctx) return;
-    close(ctx->sockfd);
-    ctx->sockfd = -1;
-    log_info("Disconnected from server.");
+// Helper to clear stdin buffer
+void clear_stdin() {
+    int c;
+    while ((c = getchar()) != '\n' && c != EOF);
 }
 
-/* ---------- client_send_request ---------- */
-int client_send_request(client_app_ctx_t *ctx, const request_t *req, response_t *resp) {
-    if (!ctx || ctx->sockfd < 0) return -1;
-
-    if (write_all(ctx->sockfd, req, sizeof(*req)) != sizeof(*req)) {
-        perror("write_all");
-        return -1;
-    }
-
-    if (read_all(ctx->sockfd, resp, sizeof(*resp)) != sizeof(*resp)) {
-        perror("read_all");
-        return -1;
-    }
-
-    return 0;
+// Helper to read a line safely
+void read_line(char *buffer, int size) {
+    fgets(buffer, size, stdin);
+    buffer[strcspn(buffer, "\n")] = 0; // Remove trailing newline
 }
 
-/* ---------- Simple demo operations ---------- */
-int client_login(client_app_ctx_t *ctx, const char *username, const char *password) {
+// Customer Menu
+void customer_menu(int userId, int sockfd) {
+    int choice;
     request_t req;
     response_t resp;
-    memset(&req, 0, sizeof(req));
-    snprintf(req.op, sizeof(req.op), "LOGIN");
-    snprintf(req.payload, sizeof(req.payload), "%s|%s", username, password);
 
-    if (client_send_request(ctx, &req, &resp) == 0) {
-        printf("Server: %s\n", resp.message);
-        if (resp.status_code == 0)
-            ctx->logged_in = 1;
-        return resp.status_code;
-    }
-    return -1;
-}
-
-int client_logout(client_app_ctx_t *ctx) {
-    request_t req;
-    response_t resp;
-    memset(&req, 0, sizeof(req));
-    snprintf(req.op, sizeof(req.op), "LOGOUT");
-
-    if (client_send_request(ctx, &req, &resp) == 0) {
-        printf("Server: %s\n", resp.message);
-        ctx->logged_in = 0;
-        return resp.status_code;
-    }
-    return -1;
-}
-
-int client_ping(client_app_ctx_t *ctx) {
-    request_t req;
-    response_t resp;
-    memset(&req, 0, sizeof(req));
-    snprintf(req.op, sizeof(req.op), "PING");
-
-    if (client_send_request(ctx, &req, &resp) == 0) {
-        printf("Server: %s\n", resp.message);
-        return resp.status_code;
-    }
-    return -1;
-}
-
-/* ---------- client_interactive_loop ---------- */
-void client_interactive_loop(client_app_ctx_t *ctx) {
     while (1) {
-        printf("\n=== Banking Management Client ===\n");
-        printf("1. Ping Server\n");
-        printf("2. Login\n");
-        printf("3. Logout\n");
-        printf("4. Exit\n");
+        printf("\n--- Customer Menu (ID: %d) ---\n", userId);
+        printf("1. View Balance\n2. Deposit Money\n3. Withdraw Money\n4. Transfer Funds\n");
+        printf("5. Apply Loan\n6. View Loan Status\n7. Add Feedback\n8. View Feedback Status\n");
+        printf("9. View Transaction History\n10. Change Password\n11. Logout\n");
         printf("Enter choice: ");
-
-        int choice;
+        
         if (scanf("%d", &choice) != 1) {
-            while (getchar() != '\n'); // flush
+            clear_stdin();
+            printf("Invalid input. Please enter a number.\n");
             continue;
         }
+        clear_stdin(); // clear newline
 
-        if (choice == 1) {
-            client_ping(ctx);
-        } else if (choice == 2) {
-            char uname[64], pass[64];
-            printf("Username: ");
-            scanf("%s", uname);
-            printf("Password: ");
-            scanf("%s", pass);
-            client_login(ctx, uname, pass);
-        } else if (choice == 3) {
-            client_logout(ctx);
-        } else if (choice == 4) {
-            printf("Exiting client.\n");
-            break;
-        } else {
-            printf("Invalid option.\n");
+        memset(&req, 0, sizeof(req));
+        memset(&resp, 0, sizeof(resp));
+
+        switch (choice) {
+            case 1:
+                strcpy(req.op, "VIEW_BALANCE");
+                snprintf(req.payload, sizeof(req.payload), "%d", userId);
+                break;
+            case 2:
+                {
+                    double amount;
+                    printf("Enter deposit amount: ");
+                    scanf("%lf", &amount);
+                    clear_stdin();
+                    strcpy(req.op, "DEPOSIT");
+                    snprintf(req.payload, sizeof(req.payload), "%u %lf", userId, amount);
+                }
+                break;
+            case 3:
+                {
+                    double amount;
+                    printf("Enter withdrawal amount: ");
+                    scanf("%lf", &amount);
+                    clear_stdin();
+                    strcpy(req.op, "WITHDRAW");
+                    snprintf(req.payload, sizeof(req.payload), "%u %lf", userId, amount);
+                }
+                break;
+            case 4:
+                {
+                    int toId;
+                    double amount;
+                    printf("Enter recipient userId: ");
+                    scanf("%d", &toId);
+                    printf("Enter amount: ");
+                    scanf("%lf", &amount);
+                    clear_stdin();
+                    strcpy(req.op, "TRANSFER");
+                    snprintf(req.payload, sizeof(req.payload), "%u %u %lf", userId, toId, amount);
+                }
+                break;
+            case 5:
+                {
+                    double loanAmount;
+                    printf("Enter loan amount: ");
+                    scanf("%lf", &loanAmount);
+                    clear_stdin();
+                    strcpy(req.op, "APPLY_LOAN");
+                    snprintf(req.payload, sizeof(req.payload), "%u %lf", userId, loanAmount);
+                }
+                break;
+            case 6:
+                strcpy(req.op, "VIEW_LOAN");
+                snprintf(req.payload, sizeof(req.payload), "%u", userId);
+                break;
+            case 7:
+                {
+                    char feedback[512];
+                    printf("Enter feedback (max 512 chars): ");
+                    read_line(feedback, sizeof(feedback));
+                    strcpy(req.op, "ADD_FEEDBACK");
+                    snprintf(req.payload, sizeof(req.payload), "%u %s", userId, feedback);
+                }
+                break;
+            case 8:
+                strcpy(req.op, "VIEW_FEEDBACK");
+                snprintf(req.payload, sizeof(req.payload), "%u", userId);
+                break;
+            case 9:
+                strcpy(req.op, "VIEW_TRANSACTIONS");
+                snprintf(req.payload, sizeof(req.payload), "%u", userId);
+                break;
+            case 10:
+                {
+                    char newpass[MAX_PASSWORD_LEN];
+                    printf("Enter new password: ");
+                    read_line(newpass, sizeof(newpass));
+                    strcpy(req.op, "CHANGE_PASSWORD");
+                    snprintf(req.payload, sizeof(req.payload), "%u %s", userId, newpass);
+                }
+                break;
+            case 11:
+                strcpy(req.op, "LOGOUT");
+                break;
+            default:
+                printf("Invalid choice!\n");
+                continue;
         }
+
+        send_request_and_get_response(sockfd, &req, &resp);
+        printf("\n--- Server Response ---\n%s\n-----------------------\n", resp.message);
+
+        if (resp.status_code == -1) return; // Server connection lost
+        if (choice == 11) return; // Logout
     }
 }
 
-/* ---------- main (standalone client) ---------- */
-#ifdef BUILD_STANDALONE_CLIENT
-int main(int argc, char *argv[]) {
-    const char *ip = (argc > 1) ? argv[1] : "127.0.0.1";
-    int port = (argc > 2) ? atoi(argv[2]) : DEFAULT_PORT;
+// Employee Menu
+void employee_menu(int userId, int sockfd) {
+    int choice;
+    request_t req;
+    response_t resp;
 
-    client_ctx_t ctx;
-    if (client_connect(&ctx, ip, port) == 0) {
-        client_interactive_loop(&ctx);
-        client_disconnect(&ctx);
-    } else {
-        fprintf(stderr, "Failed to connect to server\n");
+    while (1) {
+        printf("\n--- Employee Menu (ID: %d) ---\n", userId);
+        printf("1. Add New Customer\n2. Modify Customer Details\n3. View Pending Loans\n");
+        printf("4. Approve/Reject Loans\n5. View Assigned Loans\n6. View Customer Transactions\n");
+        printf("7. Change Password\n8. Logout\n");
+        printf("Enter choice: ");
+        
+        if (scanf("%d", &choice) != 1) {
+            clear_stdin();
+            printf("Invalid input. Please enter a number.\n");
+            continue;
+        }
+        clear_stdin();
+
+        memset(&req, 0, sizeof(req));
+        memset(&resp, 0, sizeof(resp));
+
+        switch(choice) {
+            case 1:
+                {
+                    char name[MAX_NAME_LEN], address[MAX_ADDR_LEN], username[MAX_USERNAME_LEN], password[MAX_PASSWORD_LEN];
+                    int age;
+                    printf("Enter name (no spaces): ");
+                    read_line(name, sizeof(name));
+                    printf("Enter age: ");
+                    scanf("%d", &age);
+                    clear_stdin();
+                    printf("Enter address (no spaces): ");
+                    read_line(address, sizeof(address));
+                    printf("Enter desired username: ");
+                    read_line(username, sizeof(username));
+                    printf("Enter desired password: ");
+                    read_line(password, sizeof(password));
+
+                    strcpy(req.op, "ADD_CUSTOMER");
+                    snprintf(req.payload, sizeof(req.payload), "%s %d %s %s %s", name, age, address, username, password);
+                }
+                break;
+            case 2:
+                {
+                    int custId;
+                    char name[MAX_NAME_LEN], address[MAX_ADDR_LEN];
+                    int age;
+                    printf("Enter customer userId: ");
+                    scanf("%d", &custId);
+                    clear_stdin();
+                    printf("Enter new name (no spaces): ");
+                    read_line(name, sizeof(name));
+                    printf("Enter new age: ");
+                    scanf("%d", &age);
+                    clear_stdin();
+                    printf("Enter new address (no spaces): ");
+                    read_line(address, sizeof(address));
+                    
+                    strcpy(req.op, "MODIFY_CUSTOMER");
+                    snprintf(req.payload, sizeof(req.payload), "%u %d %s %s", custId, age, name, address);
+                }
+                break;
+            case 3:
+                strcpy(req.op, "PROCESS_LOANS");
+                break;
+            case 4:
+                {
+                    unsigned long long loanId;
+                    char action_str[32];
+                    int action_code;
+                    printf("Enter loan ID: ");
+                    scanf("%llu", &loanId);
+                    printf("Approve (1) / Reject (0): ");
+                    scanf("%d", &action_code);
+                    clear_stdin();
+                    
+                    if (action_code == 1) strcpy(action_str, "approve");
+                    else if (action_code == 0) strcpy(action_str, "reject");
+                    else { printf("Invalid action code.\n"); continue; }
+                    
+                    strcpy(req.op, "APPROVE_REJECT_LOAN");
+                    snprintf(req.payload, sizeof(req.payload), "%llu %s %u", loanId, action_str, userId);
+                }
+                break;
+            case 5:
+                strcpy(req.op, "VIEW_ASSIGNED_LOANS");
+                snprintf(req.payload, sizeof(req.payload), "%u", userId);
+                break;
+            case 6:
+                {
+                    int custId;
+                    printf("Enter customer ID: ");
+                    scanf("%d", &custId);
+                    clear_stdin();
+                    strcpy(req.op, "VIEW_CUST_TRANSACTIONS");
+                    snprintf(req.payload, sizeof(req.payload), "%u", custId);
+                }
+                break;
+            case 7:
+                {
+                    char newpass[MAX_PASSWORD_LEN];
+                    printf("Enter new password: ");
+                    read_line(newpass, sizeof(newpass));
+                    strcpy(req.op, "CHANGE_PASSWORD");
+                    snprintf(req.payload, sizeof(req.payload), "%u %s", userId, newpass);
+                }
+                break;
+            case 8:
+                strcpy(req.op, "LOGOUT");
+                break;
+            default:
+                printf("Invalid choice!\n");
+                continue;
+        }
+
+        send_request_and_get_response(sockfd, &req, &resp);
+        printf("\n--- Server Response ---\n%s\n-----------------------\n", resp.message);
+        
+        if (resp.status_code == -1) return; // Server connection lost
+        if (choice == 8) return; // Logout
     }
+}
+
+// Manager Menu
+void manager_menu(int userId, int sockfd) {
+    int choice;
+    request_t req;
+    response_t resp;
+
+    while(1) {
+        printf("\n--- Manager Menu (ID: %d) ---\n", userId);
+        printf("1. Activate/Deactivate Customer Account\n2. View Non-Assigned Loans\n");
+        printf("3. Assign Loan to Employee\n4. Review Customer Feedback\n");
+        printf("5. Change Password\n6. Logout\n");
+        printf("Enter choice: ");
+        
+        if (scanf("%d", &choice) != 1) {
+            clear_stdin();
+            printf("Invalid input. Please enter a number.\n");
+            continue;
+        }
+        clear_stdin();
+
+        memset(&req, 0, sizeof(req));
+        memset(&resp, 0, sizeof(resp));
+
+        switch(choice) {
+            case 1:
+                {
+                    int custId, status;
+                    printf("Enter customer ID: ");
+                    scanf("%d", &custId);
+                    printf("Activate (1) / Deactivate (0): ");
+                    scanf("%d", &status);
+                    clear_stdin();
+                    strcpy(req.op, "SET_ACCOUNT_STATUS");
+                    snprintf(req.payload, sizeof(req.payload), "%u %u", custId, status);
+                }
+                break;
+            case 2:
+                strcpy(req.op, "VIEW_NON_ASSIGNED_LOANS");
+                break;
+            case 3:
+                {
+                    int loanId, empId;
+                    printf("Enter loan ID: ");
+                    scanf("%d", &loanId);
+                    printf("Enter employee ID: ");
+                    scanf("%d", &empId);
+                    clear_stdin();
+                    strcpy(req.op, "ASSIGN_LOAN");
+                    snprintf(req.payload, sizeof(req.payload), "%u %u", loanId, empId);
+                }
+                break;
+            case 4:
+                strcpy(req.op, "REVIEW_FEEDBACK");
+                break;
+            case 5:
+                {
+                    char newpass[MAX_PASSWORD_LEN];
+                    printf("Enter new password: ");
+                    read_line(newpass, sizeof(newpass));
+                    strcpy(req.op, "CHANGE_PASSWORD");
+                    snprintf(req.payload, sizeof(req.payload), "%u %s", userId, newpass);
+                }
+                break;
+            case 6:
+                strcpy(req.op, "LOGOUT");
+                break;
+            default:
+                printf("Invalid choice!\n");
+                continue;
+        }
+
+        send_request_and_get_response(sockfd, &req, &resp);
+        printf("\n--- Server Response ---\n%s\n-----------------------\n", resp.message);
+
+        if (resp.status_code == -1) return; // Server connection lost
+        if (choice == 6) return; // Logout
+    }
+}
+
+// Admin Menu
+void admin_menu(int userId, int sockfd) {
+    int choice;
+    request_t req;
+    response_t resp;
+
+    while(1) {
+        printf("\n--- Admin Menu (ID: %d) ---\n", userId);
+        printf("1. Add New Bank Employee\n2. Modify User Details\n");
+        printf("3. Manage User Roles\n4. Change Password\n5. Logout\n");
+        printf("Enter choice: ");
+        
+        if (scanf("%d", &choice) != 1) {
+            clear_stdin();
+            printf("Invalid input. Please enter a number.\n");
+            continue;
+        }
+        clear_stdin();
+
+        memset(&req, 0, sizeof(req));
+        memset(&resp, 0, sizeof(resp));
+
+        switch(choice) {
+            case 1:
+                {
+                    char name[MAX_NAME_LEN], role[MAX_ROLE_STR], address[MAX_ADDR_LEN], username[MAX_USERNAME_LEN], password[MAX_PASSWORD_LEN];
+                    int age;
+                    printf("Enter name (no spaces): ");
+                    read_line(name, sizeof(name));
+                    printf("Enter age: ");
+                    scanf("%d", &age);
+                    clear_stdin();
+                    printf("Enter address (no spaces): ");
+                    read_line(address, sizeof(address));
+                    printf("Enter role (employee/manager/admin): ");
+                    read_line(role, sizeof(role));
+                    printf("Enter desired username: ");
+                    read_line(username, sizeof(username));
+                    printf("Enter desired password: ");
+                    read_line(password, sizeof(password));
+
+                    strcpy(req.op, "ADD_EMPLOYEE");
+                    snprintf(req.payload, sizeof(req.payload), "%s %d %s %s %s %s", name, age, address, role, username, password);
+                }
+                break;
+            case 2:
+                {
+                    int targetId;
+                    char name[MAX_NAME_LEN], address[MAX_ADDR_LEN];
+                    int age;
+                    printf("Enter user ID to modify: ");
+                    scanf("%d", &targetId);
+                    clear_stdin();
+                    printf("Enter new name (no spaces): ");
+                    read_line(name, sizeof(name));
+                    printf("Enter new age: ");
+                    scanf("%d", &age);
+                    clear_stdin();
+                    printf("Enter new address (no spaces): ");
+                    read_line(address, sizeof(address));
+                    
+                    strcpy(req.op, "MODIFY_USER");
+                    snprintf(req.payload, sizeof(req.payload), "%u %d %s %s", targetId, age, name, address);
+                }
+                break;
+            case 3:
+                {
+                    int targetId;
+                    char role[MAX_ROLE_STR];
+                    printf("Enter user ID to change role: ");
+                    scanf("%d", &targetId);
+                    clear_stdin();
+                    printf("Enter new role (customer/employee/manager/admin): ");
+                    read_line(role, sizeof(role));
+                    
+                    strcpy(req.op, "CHANGE_ROLE");
+                    snprintf(req.payload, sizeof(req.payload), "%u %s", targetId, role);
+                }
+                break;
+            case 4:
+                {
+                    char newpass[MAX_PASSWORD_LEN];
+                    printf("Enter new password: ");
+                    read_line(newpass, sizeof(newpass));
+                    strcpy(req.op, "CHANGE_PASSWORD");
+                    snprintf(req.payload, sizeof(req.payload), "%u %s", userId, newpass);
+                }
+                break;
+            case 5:
+                strcpy(req.op, "LOGOUT");
+                break;
+            default:
+                printf("Invalid choice!\n");
+                continue;
+        }
+
+        send_request_and_get_response(sockfd, &req, &resp);
+        printf("\n--- Server Response ---\n%s\n-----------------------\n", resp.message);
+        
+        if (resp.status_code == -1) return; // Server connection lost
+        if (choice == 5) return; // Logout
+    }
+}
+
+// Main function
+int main(int argc, char *argv[]) {
+    if(argc != 2) {
+        printf("Usage: %s <server-ip>\n", argv[0]);
+        exit(EXIT_FAILURE);
+    }
+    
+    struct sockaddr_in serv_addr;
+    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+    
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(DEFAULT_PORT);
+    if(inet_pton(AF_INET, argv[1], &serv_addr.sin_addr) <= 0) {
+        perror("inet_pton");
+        exit(EXIT_FAILURE);
+    }
+    
+    if (connect(sockfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
+        perror("Connection failed");
+        exit(EXIT_FAILURE);
+    }
+    
+    printf("Connected to server at %s\n", argv[1]);
+
+    int userId;
+    char role[MAX_ROLE_STR];
+    request_t req;
+    response_t resp;
+
+    // Login
+    char username[MAX_USERNAME_LEN], password[MAX_PASSWORD_LEN];
+    printf("Username: ");
+    read_line(username, sizeof(username));
+    printf("Password: ");
+    read_line(password, sizeof(password));
+
+    memset(&req, 0, sizeof(req));
+    strcpy(req.op, "LOGIN");
+    snprintf(req.payload, sizeof(req.payload), "%s %s", username, password);
+    
+    send_request_and_get_response(sockfd, &req, &resp);
+
+    if (sscanf(resp.message, "SUCCESS %d %s", &userId, role) == 2) {
+        printf("Login successful! Role: %s\n", role);
+
+        if(strcmp(role, "customer") == 0) customer_menu(userId, sockfd);
+        else if(strcmp(role, "employee") == 0) employee_menu(userId, sockfd);
+        else if(strcmp(role, "manager") == 0) manager_menu(userId, sockfd);
+        else if(strcmp(role, "admin") == 0) admin_menu(userId, sockfd);
+        else printf("Unknown role received from server.\n");
+
+    } else {
+        printf("Login failed: %s\n", resp.message);
+    }
+
+    printf("Logging out and disconnecting.\n");
+    close(sockfd);
     return 0;
 }
-#endif
