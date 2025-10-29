@@ -48,9 +48,7 @@ int verify_password(const char *password, const char *hash) {
     if (!verified_hash) return 0;
     return (strcmp(verified_hash, hash) == 0);
 }
-
-// --- Login Fix (Uses Hashing and consistent type names) ---
-// --- Security & Auth (CRITICAL FIX: Enforce Active Status) ---
+// --- User Login Function with Account Status Check (CRITICAL FIX) ---
 int login_user(const char *username, const char *password, int *userId, char *role, size_t role_sz) {
     int fd = open(USERS_DB_FILE, O_RDONLY);
     if (fd < 0) return 0;
@@ -63,14 +61,16 @@ int login_user(const char *username, const char *password, int *userId, char *ro
     while (read(fd, &user, sizeof(user_rec_t)) == sizeof(user_rec_t)) {
         if (strcmp(user.username, username) == 0) {
             
-            // CRITICAL FIX: Verify using hash
             if (verify_password(password, user.password_hash)) {
                 
-                // NEW CHECK: Prevent login if account is INACTIVE
-                if (user.active == STATUS_INACTIVE) {
-                    // Set a flag (2) to indicate successful authentication but inactive status.
-                    // The server.c must check for this '2'.
-                    found = 2; 
+                // NEW: Read the account record to check account status
+                account_rec_t acc;
+                int account_found = read_account(user.user_id, &acc);
+
+                // FIX: Deny login if USER is INACTIVE OR ACCOUNT is INACTIVE
+                // We assume 'read_account' success means the account exists, otherwise we only check user status.
+                if (user.active == STATUS_INACTIVE || (account_found && acc.active == STATUS_INACTIVE)) {
+                    found = 2; // Inactive
                 } else {
                     *userId = user.user_id;
                     
@@ -84,7 +84,7 @@ int login_user(const char *username, const char *password, int *userId, char *ro
                     found = 1; // SUCCESS
                 }
             }
-            break; // Username is unique, so break whether password matched or not
+            break; // Username is unique
         }
     }
     unlock_file(fd);

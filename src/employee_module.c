@@ -4,6 +4,9 @@
 #include <string.h>
 #include <stddef.h>
 
+typedef struct { double amount; } txn_data_t;
+int deposit_modifier(account_rec_t *acc, void *data);
+
 // FIX: Added required fields for User creation
 int add_new_customer(user_rec_t *user, account_rec_t *acc, const char *username, const char *password, char *resp_msg, size_t resp_sz) {
     
@@ -52,7 +55,9 @@ int modify_customer(uint32_t user_id, const char *name, int age, const char *add
     strncpy(user.address, address, sizeof(user.address) - 1);
     
     if(write_user(&user)) {
-        snprintf(resp_msg, resp_sz, "Customer Modified (ID: %u). New Details: Name='%s', Age=%d, Address='%s'", 
+        // FIX: Improved output format using correct struct fields
+        snprintf(resp_msg, resp_sz, 
+                 "Customer Modified (ID: %u).\nNew Details:\nName: %s\nAge: %d\nAddress: %s", 
                  user_id, user.name, user.age, user.address);
         return 1;
     }
@@ -77,6 +82,20 @@ int approve_reject_loan(uint64_t loan_id, const char *action, uint32_t emp_id, c
     
     if(strcmp(action,"approve")==0) {
         loan.status = LOAN_APPROVED;
+        
+        // CRITICAL FIX: Deposit the loan amount into the customer's account
+        txn_data_t data = {loan.amount};
+        
+        // This relies on atomic_update_account being thread-safe
+        if (atomic_update_account(loan.user_id, deposit_modifier, &data)) {
+            // Log the transaction
+            txn_rec_t tx = {0, 0, loan.user_id, loan.amount, time(NULL), "loan_deposit"};
+            append_transaction(&tx);
+        } else {
+            // Failed to deposit funds (e.g., account file error) - CRITICAL ERROR
+            snprintf(resp_msg, resp_sz, "Loan Decision Failed: Approved, but failed to deposit funds.");
+            return 0; 
+        }
     }
     else if (strcmp(action,"reject")==0) {
         loan.status = LOAN_REJECTED;

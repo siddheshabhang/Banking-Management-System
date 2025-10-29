@@ -487,37 +487,84 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
     
+    printf("\n\t*** WELCOME TO THE BANK! ***\n");
     printf("Connected to server at %s\n", argv[1]);
 
-    int userId;
-    char role[MAX_ROLE_STR];
+    int userId = 0; // Initialize userId outside the loop
+    char role[MAX_ROLE_STR] = {0};
     request_t req;
     response_t resp;
 
-    // Login
-    char username[MAX_USERNAME_LEN], password[MAX_PASSWORD_LEN];
-    printf("Username: ");
-    read_line(username, sizeof(username));
-    printf("Password: ");
-    read_line(password, sizeof(password));
+    // --- Role Selection and Login Loop ---
+    while (userId == 0) {
+        printf("\n==================================\n");
+        printf("Please select your role to login:\n");
+        printf("1. Customer\n");
+        printf("2. Employee\n");
+        printf("3. Manager\n");
+        printf("4. Administrator\n");
+        printf("5. Exit Client\n");
+        printf("Enter choice (1-5): ");
 
-    memset(&req, 0, sizeof(req));
-    strcpy(req.op, "LOGIN");
-    snprintf(req.payload, sizeof(req.payload), "%s %s", username, password);
-    
-    send_request_and_get_response(sockfd, &req, &resp);
+        int choice;
+        if (scanf("%d", &choice) != 1) {
+            clear_stdin();
+            printf("Invalid input. Please enter a number.\n");
+            continue;
+        }
+        clear_stdin();
 
-    if (sscanf(resp.message, "SUCCESS %d %s", &userId, role) == 2) {
-        printf("Login successful! Role: %s\n", role);
+        if (choice == 5) {
+            printf("Exiting client...\n");
+            close(sockfd);
+            return 0;
+        }
+        
+        // --- Standard Login Prompt ---
+        char username[MAX_USERNAME_LEN], password[MAX_PASSWORD_LEN];
+        printf("Username: ");
+        read_line(username, sizeof(username));
+        printf("Password: ");
+        read_line(password, sizeof(password));
 
+        // Prepare LOGIN Request
+        memset(&req, 0, sizeof(req));
+        strcpy(req.op, "LOGIN");
+        snprintf(req.payload, sizeof(req.payload), "%s %s", username, password);
+        
+        send_request_and_get_response(sockfd, &req, &resp);
+
+        // Check Server Response and Validate Role
+        if (sscanf(resp.message, "SUCCESS %d %s", &userId, role) == 2) {
+            
+            // Check if the role matches the selected choice (optional but good practice)
+            int valid_role = 0;
+            if (choice == 1 && strcmp(role, "customer") == 0) valid_role = 1;
+            if (choice == 2 && strcmp(role, "employee") == 0) valid_role = 1;
+            if (choice == 3 && strcmp(role, "manager") == 0) valid_role = 1;
+            if (choice == 4 && strcmp(role, "admin") == 0) valid_role = 1;
+
+            if (valid_role) {
+                printf("Login successful! Role: %s\n", role);
+                break; // Exit the login loop
+            } else {
+                printf("Login failed: Credentials are valid, but the role '%s' does not match selection.\n", role);
+                userId = 0; // Reset to force re-login
+            }
+
+        } else {
+            printf("Login failed: %s\n", resp.message);
+            userId = 0; // Keep looping
+        }
+    } // End of while (userId == 0) loop
+
+    // --- Role-Specific Menu Dispatch (Starts here) ---
+    if (userId != 0) {
         if(strcmp(role, "customer") == 0) customer_menu(userId, sockfd);
         else if(strcmp(role, "employee") == 0) employee_menu(userId, sockfd);
         else if(strcmp(role, "manager") == 0) manager_menu(userId, sockfd);
         else if(strcmp(role, "admin") == 0) admin_menu(userId, sockfd);
         else printf("Unknown role received from server.\n");
-
-    } else {
-        printf("Login failed: %s\n", resp.message);
     }
 
     printf("Logging out and disconnecting.\n");
