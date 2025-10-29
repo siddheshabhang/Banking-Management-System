@@ -52,7 +52,8 @@ int modify_customer(uint32_t user_id, const char *name, int age, const char *add
     strncpy(user.address, address, sizeof(user.address) - 1);
     
     if(write_user(&user)) {
-        snprintf(resp_msg, resp_sz, "Customer Modified");
+        snprintf(resp_msg, resp_sz, "Customer Modified (ID: %u). New Details: Name='%s', Age=%d, Address='%s'", 
+                 user_id, user.name, user.age, user.address);
         return 1;
     }
     snprintf(resp_msg, resp_sz, "Customer Modification Failed");

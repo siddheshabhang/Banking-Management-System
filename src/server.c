@@ -69,13 +69,20 @@ void *client_thread_main(void *arg) {
         char *op = req.op;
         char *payload = req.payload;
 
-        // --- Login / Logout / Password ---
+        // --- Login / Logout / Password (FIXED: Single Session and Deactivated Check) ---
         if(strcmp(op,"LOGIN")==0) {
             char username[MAX_USERNAME_LEN],password[MAX_PASSWORD_LEN];
             sscanf(payload,"%s %s",username,password);
             int userId; char role[MAX_ROLE_STR];
+            int login_result; // 0=Fail, 1=Success, 2=Deactivated (requires utils.c update)
 
-            if(login_user(username,password,&userId,role,sizeof(role))) {
+            // Attempt login and get status
+            login_result = login_user(username,password,&userId,role,sizeof(role));
+
+            if (login_result == 2) { // Account is deactivated
+                snprintf(resp.message,sizeof(resp.message),"FAILURE Account is deactivated. Contact your bank.");
+            }
+            else if (login_result == 1) { // Successful password and active status
                 // START CONCURRENCY CHECK: Is the user already logged in?
                 pthread_mutex_lock(&g_server_ctx.db_lock);
                 int already_logged_in = 0;
@@ -102,7 +109,8 @@ void *client_thread_main(void *arg) {
                     snprintf(resp.message,sizeof(resp.message),"SUCCESS %d %s",userId,role);
                 }
                 // END CONCURRENCY CHECK
-            } else {
+            }
+            else { // login_result == 0 (Invalid Credentials)
                 snprintf(resp.message,sizeof(resp.message),"FAILURE Invalid Credentials");
             }
         }
@@ -118,7 +126,7 @@ void *client_thread_main(void *arg) {
             change_password(userId,newpass,resp.message,sizeof(resp.message));
         }
 
-        // --- Customer Commands (FIXED PAYLOAD PARSING) ---
+        // --- Customer Commands (FIXED Routing & Parsing) ---
         else if(strcmp(op,"VIEW_BALANCE")==0) {
             uint32_t userId;
             sscanf(payload,"%u",&userId);
@@ -134,7 +142,7 @@ void *client_thread_main(void *arg) {
             sscanf(payload,"%u %lf",&userId,&amount);
             withdraw_money(userId,amount,resp.message,sizeof(resp.message));
         }
-        else if(strcmp(op,"TRANSFER")==0) { // FIXED: Ensure correct format specifiers and check count
+        else if(strcmp(op,"TRANSFER")==0) { // FIX: Ensure correct format specifiers and check count
             uint32_t fromId,toId; double amount;
             if(sscanf(payload,"%u %u %lf",&fromId,&toId,&amount) == 3) {
                 transfer_funds(fromId,toId,amount,resp.message,sizeof(resp.message));
@@ -148,12 +156,12 @@ void *client_thread_main(void *arg) {
             sscanf(payload,"%u %lf",&userId,&amount);
             apply_loan(userId,amount,resp.message,sizeof(resp.message));
         }
-        else if(strcmp(op,"VIEW_LOAN")==0) { // FIXED: Correct routing for View Loan Status
+        else if(strcmp(op,"VIEW_LOAN")==0) { // FIX: Routing for View Loan Status
             uint32_t userId;
             sscanf(payload,"%u",&userId);
             view_loan_status(userId, resp.message, sizeof(resp.message));
         }
-        else if(strcmp(op,"ADD_FEEDBACK")==0) { // FIXED: Correct payload parsing for message content
+        else if(strcmp(op,"ADD_FEEDBACK")==0) { // FIX: Correct payload parsing for message content
             uint32_t userId;
             char *msg_start;
             
@@ -169,18 +177,18 @@ void *client_thread_main(void *arg) {
                 resp.status_code = 1;
             }
         }
-        else if(strcmp(op,"VIEW_FEEDBACK")==0) { // FIXED: Correct routing for View Feedback Status
+        else if(strcmp(op,"VIEW_FEEDBACK")==0) { // FIX: Routing for View Feedback Status
             uint32_t userId;
             sscanf(payload,"%u",&userId);
             view_feedback_status(userId, resp.message, sizeof(resp.message));
         }
-        else if(strcmp(op,"VIEW_TRANSACTIONS")==0) { // FIXED: Correct routing for View Transaction History
+        else if(strcmp(op,"VIEW_TRANSACTIONS")==0) { // FIX: Routing for View Transaction History
             uint32_t userId;
             sscanf(payload,"%u",&userId);
             view_transaction_history(userId, resp.message, sizeof(resp.message));
         }
 
-        // --- Employee Commands ---
+        // --- Employee Commands (All Routed Correctly) ---
         else if(strcmp(op,"ADD_CUSTOMER")==0) {
             user_rec_t user; 
             account_rec_t acc;
@@ -201,17 +209,33 @@ void *client_thread_main(void *arg) {
             sscanf(payload,"%u %s %d %s",&userId,name,&age,address);
             modify_customer(userId,name,age,address,resp.message,sizeof(resp.message));
         }
+        else if(strcmp(op,"PROCESS_LOANS")==0) { // FIX: Routing for View Pending Loans (Employee)
+            process_loans(resp.message,sizeof(resp.message));
+        }
         else if(strcmp(op,"APPROVE_REJECT_LOAN")==0) {
             uint64_t loanId; uint32_t empId; char action[32];
             sscanf(payload,"%llu %s %u",(unsigned long long *)&loanId, action, &empId);
             approve_reject_loan(loanId,action,empId,resp.message,sizeof(resp.message));
         }
+        else if(strcmp(op,"VIEW_ASSIGNED_LOANS")==0) {
+            uint32_t empId;
+            sscanf(payload,"%u",&empId);
+            view_assigned_loans(empId,resp.message,sizeof(resp.message));
+        }
+        else if(strcmp(op,"VIEW_CUST_TRANSACTIONS")==0) { // FIX: Routing for View Customer Transactions (Employee)
+            uint32_t custId;
+            sscanf(payload,"%u",&custId);
+            view_customer_transactions(custId,resp.message,sizeof(resp.message));
+        }
 
-        // --- Manager Commands ---
+        // --- Manager Commands (All Routed Correctly) ---
         else if(strcmp(op,"SET_ACCOUNT_STATUS")==0) {
             uint32_t custId,status;
             sscanf(payload,"%u %u",&custId,&status);
             set_account_status(custId,status,resp.message,sizeof(resp.message));
+        }
+        else if(strcmp(op,"VIEW_NON_ASSIGNED_LOANS")==0) { // FIX: Routing for View Non-Assigned Loans (Manager)
+            view_non_assigned_loans(resp.message,sizeof(resp.message));
         }
         else if(strcmp(op,"ASSIGN_LOAN")==0) {
             uint32_t loanId,empId;
@@ -256,7 +280,6 @@ void *client_thread_main(void *arg) {
     if (current_userId != 0) {
         // If the user was logged in, ensure their session is cleared from the global tracker.
         remove_active_session(current_userId);
-        printf("User ID %d session closed.\n", current_userId);
     }
     close(fd);
     free(ctx);
