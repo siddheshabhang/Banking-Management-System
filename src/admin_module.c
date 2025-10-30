@@ -5,6 +5,16 @@
 #include <stddef.h>
 #include <stdint.h>
 
+static const char* get_role_str_for_list(role_t role) {
+    switch(role) {
+        case ROLE_CUSTOMER: return "CUSTOMER";
+        case ROLE_EMPLOYEE: return "EMPLOYEE";
+        case ROLE_MANAGER:  return "MANAGER";
+        case ROLE_ADMIN:    return "ADMIN";
+        default:            return "UNKNOWN";
+    }
+}
+
 int add_employee(const char *name, int age, const char *address, const char *role_str,
                  const char *username, const char *password, char *resp_msg, size_t resp_sz) {
     
@@ -53,7 +63,9 @@ int modify_user(uint32_t userId, const char *name, int age, const char *address,
     strncpy(user.address, address, sizeof(user.address) - 1);
     
     if(write_user(&user)) {
-        snprintf(resp_msg,resp_sz,"User Modified");
+        snprintf(resp_msg, resp_sz, 
+                 "User Modified (ID: %u).\nNew Details:\nName: %s\nAge: %d\nAddress: %s", 
+                 userId, user.name, user.age, user.address);
         return 1;
     }
     
@@ -88,4 +100,55 @@ int change_user_role(uint32_t userId, const char *role_str, char *resp_msg, size
     
     snprintf(resp_msg,resp_sz,"Role Update Failed");
     return 0;
+}
+
+int list_all_users(char *resp_msg, size_t resp_sz) {
+    int fd = open(USERS_DB_FILE, O_RDONLY);
+    if(fd < 0) { 
+        snprintf(resp_msg, resp_sz, "Failed to open user database"); 
+        return 0; 
+    }
+    
+    lock_file(fd); // Use read-lock
+    
+    user_rec_t user;
+    char tmp[256]; 
+    resp_msg[0] = '\0'; // Start with an empty string
+    int found = 0;
+    size_t current_len = 0;
+
+    // Add a header to the response
+    snprintf(resp_msg, resp_sz, "--- User List ---\n");
+    strncat(resp_msg, "ID   | Username        | Role\n", resp_sz - strlen(resp_msg) - 1);
+    strncat(resp_msg, "---- | --------------- | --------\n", resp_sz - strlen(resp_msg) - 1);
+    current_len = strlen(resp_msg);
+    
+    while(read(fd, &user, sizeof(user_rec_t)) == sizeof(user_rec_t)) {
+        // List everyone *except* other Admins
+        if(user.role != ROLE_ADMIN) {
+            snprintf(tmp, sizeof(tmp), "%-4u | %-15s | %s\n",
+                     user.user_id, 
+                     user.username, 
+                     get_role_str_for_list(user.role));
+            
+            // Check if we have space to add this new line
+            if (current_len + strlen(tmp) < resp_sz) {
+                strncat(resp_msg, tmp, resp_sz - current_len - 1);
+                current_len += strlen(tmp);
+            } else {
+                // Buffer is full, stop adding users
+                strncat(resp_msg, "... (list truncated) ...\n", resp_sz - current_len - 1);
+                break; 
+            }
+            found = 1;
+        }
+    }
+    
+    unlock_file(fd);
+    close(fd);
+    
+    if (!found) {
+        snprintf(resp_msg, resp_sz, "No customers or employees found.");
+    }
+    return 1;
 }

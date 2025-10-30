@@ -424,6 +424,19 @@ void admin_menu(int userId, int sockfd) {
                 break;
             case 3:
                 {
+                    printf("Fetching user list...\n");
+                    strcpy(req.op, "LIST_USERS");
+                    req.payload[0] = '\0'; // No payload needed
+                    
+                    send_request_and_get_response(sockfd, &req, &resp);
+                    
+                    // Print the list received from the server
+                    printf("\n--- Server Response ---\n%s\n-----------------------\n", resp.message);
+                    
+                    if (resp.status_code != 0) {
+                        // If fetching list failed, don't continue to the next step
+                        continue; // Go back to menu
+                    }
                     int targetId;
                     char role[MAX_ROLE_STR];
                     printf("Enter user ID to change role: ");
@@ -432,6 +445,8 @@ void admin_menu(int userId, int sockfd) {
                     printf("Enter new role (customer/employee/manager/admin): ");
                     read_line(role, sizeof(role));
                     
+                    // Reset req struct for the *next* operation
+                    memset(&req, 0, sizeof(req)); 
                     strcpy(req.op, "CHANGE_ROLE");
                     snprintf(req.payload, sizeof(req.payload), "%u %s", targetId, role);
                 }

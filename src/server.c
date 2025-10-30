@@ -266,8 +266,17 @@ void *client_thread_main(void *arg) {
         }
         else if(strcmp(op,"MODIFY_USER")==0) {
             uint32_t userId; char name[128],address[256]; int age;
-            sscanf(payload,"%u %s %d %s",&userId,name,&age,address);
-            modify_user(userId,name,age,address,resp.message,sizeof(resp.message));
+
+            // FIX: Match the client's payload format (ID, Age, Name, Address)
+            if (sscanf(payload,"%u %d %s %s",&userId,&age,name,address) == 4) {
+                modify_user(userId,name,age,address,resp.message,sizeof(resp.message));
+            } else {
+                snprintf(resp.message,sizeof(resp.message),"MODIFY_USER: Invalid payload format.");
+                resp.status_code = 1;
+            }
+        }
+        else if(strcmp(op,"LIST_USERS")==0) {
+            list_all_users(resp.message, sizeof(resp.message));
         }
         else if(strcmp(op,"CHANGE_ROLE")==0) {
             uint32_t userId; char role[32];
