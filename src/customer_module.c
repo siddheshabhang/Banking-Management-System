@@ -6,7 +6,6 @@
 #include <stddef.h>
 
 // --- Transaction Modifiers (Used by atomic_update_account) ---
-
 typedef struct {
     double amount;
 } txn_data_t;
@@ -133,8 +132,13 @@ int transfer_funds(uint32_t from_id, uint32_t to_id, double amount, char *resp_m
 
     // 1. Check receiver account exists and is active first
     account_rec_t to_acc;
-    if (!read_account(to_id, &to_acc) || to_acc.active == STATUS_INACTIVE) {
-        snprintf(resp_msg, resp_sz, "Transfer Failed: Recipient account not found or is inactive.");
+    if (!read_account(to_id, &to_acc)) {
+        snprintf(resp_msg, resp_sz, "Transfer Failed: Recipient account not found");
+        return 0;
+    }
+
+    if (read_account(to_id, &to_acc) && to_acc.active == STATUS_INACTIVE) {
+        snprintf(resp_msg, resp_sz, "Transfer Failed: Recipient account is inactive");
         return 0;
     }
 
@@ -151,8 +155,6 @@ int transfer_funds(uint32_t from_id, uint32_t to_id, double amount, char *resp_m
 
     // 3. Attempt to deposit to receiver
     if (!atomic_update_account(to_id, deposit_modifier, &deposit_data)) {
-        // This is the critical failure point! The money is gone from sender but not in receiver.
-        // We must attempt to roll back the withdrawal.
         snprintf(resp_msg, resp_sz, "CRITICAL ERROR: Transfer failed after withdrawal. Contact support.");
         
         // Rollback: Deposit the money back to the sender
@@ -189,7 +191,7 @@ int apply_loan(uint32_t user_id, double amount, char *resp_msg, size_t resp_sz) 
     return 0;
 }
 
-// NEW FEATURE: View Loan Status
+//View Loan Status
 int view_loan_status(uint32_t user_id, char *resp_msg, size_t resp_sz) {
     int fd = open(LOANS_DB_FILE, O_RDONLY);
     if(fd < 0) { snprintf(resp_msg, resp_sz, "No loan records found"); return 0; }
@@ -221,7 +223,7 @@ int view_loan_status(uint32_t user_id, char *resp_msg, size_t resp_sz) {
     return 1;
 }
 
-// NEW FEATURE: Add Feedback
+//Add Feedback
 int add_feedback(uint32_t user_id, const char *msg, char *resp_msg, size_t resp_sz) {
     feedback_rec_t fb = {0, user_id, "", 0, "", time(NULL)};
     strncpy(fb.message, msg, sizeof(fb.message) - 1);
@@ -234,7 +236,7 @@ int add_feedback(uint32_t user_id, const char *msg, char *resp_msg, size_t resp_
     return 0;
 }
 
-// NEW FEATURE: View Feedback Status
+//View Feedback Status
 int view_feedback_status(uint32_t user_id, char *resp_msg, size_t resp_sz) {
     int fd = open(FEEDBACK_DB_FILE, O_RDONLY);
     if(fd < 0) { snprintf(resp_msg, resp_sz, "No feedback records found"); return 0; }
@@ -247,7 +249,7 @@ int view_feedback_status(uint32_t user_id, char *resp_msg, size_t resp_sz) {
     
     while(read(fd, &fb, sizeof(feedback_rec_t)) == sizeof(feedback_rec_t)) {
         if(fb.user_id == user_id) {
-            snprintf(tmp, sizeof(tmp), "ID: %llu, Status: %s, Msg: \"%.30s...\"\n",
+            snprintf(tmp, sizeof(tmp), "ID: %llu, Status: %s, Msg: \"%s\"\n",
                      (unsigned long long)fb.fb_id, 
                      fb.reviewed ? "REVIEWED" : "PENDING",
                      fb.message);
@@ -283,30 +285,48 @@ int view_transaction_history(uint32_t user_id, char *resp_msg, size_t resp_sz) {
     off_t offset = lseek(fd, -sizeof(txn_rec_t), SEEK_END);
     while(offset >= 0) {
         if(read(fd, &tx, sizeof(txn_rec_t)) != sizeof(txn_rec_t)) break;
+        
+        char time_str[64];
+        struct tm *tm_info = localtime(&tx.timestamp);
+        strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", tm_info);
+        
+        char type_str[16];
+        uint32_t other_id = 0;
+        int tx_is_relevant = 0; // Flag to mark if this TXN should be shown
 
-        if(tx.from_account == user_id || tx.to_account == user_id) {
+        // --- NEW LOGIC ---
+        // Check the narration and match the user_id to the correct role
+        
+        if (strcmp(tx.narration, "deposit") == 0 && tx.to_account == user_id) {
+            strcpy(type_str, "DEPOSIT");
+            other_id = 0; // Or tx.from_account
+            tx_is_relevant = 1;
+        
+        } else if (strcmp(tx.narration, "withdraw") == 0 && tx.from_account == user_id) {
+            strcpy(type_str, "WITHDRAW");
+            other_id = 0; // Or tx.to_account
+            tx_is_relevant = 1;
+        
+        } else if (strcmp(tx.narration, "transfer_out") == 0 && tx.from_account == user_id) {
+            // User is the SENDER, show "TRANSFER_OUT"
+            strcpy(type_str, "TRANSFER_OUT");
+            other_id = tx.to_account;
+            tx_is_relevant = 1;
+
+        } else if (strcmp(tx.narration, "transfer_in") == 0 && tx.to_account == user_id) {
+            // User is the RECEIVER, show "TRANSFER_IN"
+            strcpy(type_str, "TRANSFER_IN");
+            other_id = tx.from_account;
+            tx_is_relevant = 1;
+        
+        } else if (strcmp(tx.narration, "loan_deposit") == 0 && tx.to_account == user_id) {
+            strcpy(type_str, "LOAN_DEPOSIT");
+            other_id = 0; // Bank is the sender
+            tx_is_relevant = 1;
+        }
+
+        if(tx_is_relevant) {
             found = 1;
-            char time_str[64];
-            struct tm *tm_info = localtime(&tx.timestamp);
-            strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", tm_info);
-            
-            char type_str[16];
-            uint32_t other_id = 0;
-
-            if (strcmp(tx.narration, "deposit") == 0) {
-                strcpy(type_str, "DEPOSIT");
-                other_id = tx.from_account;
-            } else if (strcmp(tx.narration, "withdraw") == 0) {
-                strcpy(type_str, "WITHDRAW");
-                other_id = tx.to_account;
-            } else if (strcmp(tx.narration, "transfer_out") == 0) {
-                strcpy(type_str, "TRANSFER_OUT");
-                other_id = tx.to_account;
-            } else if (strcmp(tx.narration, "transfer_in") == 0) {
-                strcpy(type_str, "TRANSFER_IN");
-                other_id = tx.from_account;
-            }
-
             snprintf(tmp, sizeof(tmp), "%-11s | %-8.2f | %-10u | %s\n",
                      type_str, tx.amount, other_id, time_str);
             strncat(resp_msg, tmp, resp_sz - strlen(resp_msg) - 1);

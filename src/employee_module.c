@@ -83,6 +83,15 @@ int approve_reject_loan(uint64_t loan_id, const char *action, uint32_t emp_id, c
     if(strcmp(action,"approve")==0) {
         loan.status = LOAN_APPROVED;
         
+        account_rec_t cust_acc;
+        if (!read_account(loan.user_id, &cust_acc)) {
+            snprintf(resp_msg, resp_sz, "Loan Approval Failed: Customer account not found.");
+            return 0; // Stop processing
+        }
+        if (cust_acc.active == STATUS_INACTIVE) {
+            snprintf(resp_msg, resp_sz, "Loan Approval Failed: User Account is deactivated.");
+            return 0; // Stop processing
+        }
         // CRITICAL FIX: Deposit the loan amount into the customer's account
         txn_data_t data = {loan.amount};
         
