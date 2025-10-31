@@ -1,167 +1,152 @@
-# Banking Management System
+# 🏦 Banking Management System
 
-A high-performance, concurrent banking simulation built in C. This project simulates the core functionalities of a bank, featuring a multi-threaded server that handles multiple clients simultaneously, with a strong focus on data integrity and eliminating race conditions.
+## 📜 Description
 
-## 1. Core Technical Features
+This project is a comprehensive, multi-threaded, client-server banking management system written entirely in C. It focuses on demonstrating fundamental system software concepts, particularly **concurrency**, **thread synchronization**, **file management using system calls**, and **socket programming**. The system features role-based access control and ensures data consistency through record-level file locking.
 
-This isn't just a simple simulation; it's an exercise in robust, low-level system design.
+## ✨ Features
 
-* **⚡ True Concurrency with Record-Level Locking:** The system does *not* lock entire database files during transactions. Instead, it uses `fcntl` to implement **record-level locking** on the `users.db`, `accounts.db`, and `loans.db`. This allows two non-conflicting operations (e.g., Customer A depositing and Customer C withdrawing) to execute in parallel, dramatically increasing throughput.
+* **Role-Based Access Control:**
+    * **Customer:** Manages their personal account.
+    * **Employee:** Manages customer accounts and processes loans.
+    * **Manager:** Oversees employees, manages account statuses, and reviews feedback.
+    * **Administrator:** Manages all user accounts (customers and employees).
+* **Account Management:**
+    * Each customer has a **single dedicated account**.
+    * View balance.
+    * Deposit and withdraw funds.
+    * Transfer funds between customers (using Account Numbers).
+    * View detailed, timestamped transaction history.
+* **Loan System:**
+    * Customers can apply for loans.
+    * Managers can assign pending loans to employees.
+    * Employees can view assigned loans and approve/reject them.
+    * Approved loans automatically credit the customer's account.
+* **Feedback System:**
+    * Customers can submit feedback.
+    * Managers can review all unread feedback.
+* **User Management:**
+    * Employees can add new customers.
+    * Employees/Admins can modify user details (KYC info, password).
+    * Managers can activate/deactivate customer accounts.
+    * Admins can add new employees/managers and change user roles.
+* **Concurrency & Security:**
+    * **Multithreaded Server:** Handles multiple client connections simultaneously using POSIX threads (`pthread`).
+    * **Session Management:** Prevents multiple logins by the same user ID using a mutex-protected global array of active sessions.
+    * **File Locking:** Uses `fcntl` for fine-grained **record-level locking** on specific accounts/users (via `atomic_update_` functions) to prevent race conditions and ensure data integrity.
+    * **Secure Hashing:** User passwords are securely hashed using `crypt()` (SHA-512).
+    * **System Calls:** Prioritizes direct system calls (`open`, `read`, `write`, `lseek`, `fcntl`) over standard library functions for file I/O.
 
-* **🛡️ Atomic Read-Modify-Write Operations:** All database modifications (e.g., changing a balance, approving a loan, updating a password) are wrapped in atomic helper functions (`atomic_update_account`, `atomic_update_user`, etc.). This pattern acquires a record lock, reads the data, modifies it, and writes it back as a single, indivisible operation, **guaranteeing no race conditions**.
+## ⚙️ Technical Requirements Met
 
-* **🖥️ Multi-Threaded Server:** Built with POSIX threads (`pthread`) and Socket Programming, the server can manage simultaneous connections from multiple clients.
+* **Socket Programming:** Implements a client-server architecture using TCP sockets.
+* **System Calls:** Uses system calls (`open`, `read`, `write`, `lseek`, `fcntl`) for all file management.
+* **File Management:** Uses binary files as a database (e.g., `users.db`, `accounts.db`).
+* **File Locking:** Implements exclusive (write) locks at the record level for concurrent operations.
+* **Multithreading:** Server uses `pthread_create` to spawn a new thread for each client.
+* **Synchronization:** Uses `pthread_mutex_t` for session management and `fcntl` locks for file data consistency.
 
-* **🔐 Secure Authentication & Session Management:**
-    * **Password Hashing:** Passwords are never stored in plaintext. They are securely hashed using `libcrypt`.
-    * [cite_start]**Single Session Enforcement:** The server actively tracks logged-in users and prevents the same account from being logged in more than once at a time. [cite: 29, 41, 52, 60]
+## 🗃️ Data Integrity & ACID Properties
 
-## 2. Features by User Role
+This project implements features to ensure data integrity, modeled after ACID properties.
 
-[cite_start]The system enforces a strict separation of duties through four distinct user roles, each with a specific set of permissions. [cite: 26]
+* **A - Atomicity (All or Nothing):**
+    * Atomicity is guaranteed at the level of a *single record modification* (e.g., `atomic_update_user`, `atomic_update_account`).
+    * Complex, multi-step transactions (like `transfer_funds`) are made concurrency-safe through sequential record locks. The system ensures that if the deposit step fails, the initial withdrawal is rolled back, maintaining consistency.
 
-### 👤 Customer
-| Feature | Status | Source |
-| :--- | :--- | :--- |
-| Login & Secure Logout | [cite_start]✅ | [cite: 1, 38] |
-| Deactivated Account Check | [cite_start]✅ | [cite: 2] |
-| View Account Balance | [cite_start]✅ | [cite: 30] |
-| Deposit Money (Atomic) | [cite_start]✅ | [cite: 31] |
-| Withdraw Money (Atomic) | [cite_start]✅ | [cite: 32] |
-| Transfer Funds (Atomic) | [cite_start]✅ | [cite: 33] |
-| Apply for Loan | [cite_start]✅ | [cite: 34] |
-| View Loan Status | [cite_start]✅ | [cite: 5] |
-| Add Customer Feedback | [cite_start]✅ | [cite: 36] |
-| View Feedback Status | [cite_start]✅ | [cite: 6] |
-| View Transaction History | [cite_start]✅ | [cite: 37] |
-| Change Password | [cite_start]✅ | [cite: 35] |
+* **C - Consistency:**
+    * Enforced by **application-level logic** (e.g., checking for sufficient funds in `withdraw_modifier`) and **database constraints** (e.g., `check_uniqueness` for username, email, and phone).
 
-### 💼 Bank Employee
-| Feature | Status | Source |
-| :--- | :--- | :--- |
-| Login & Secure Logout | [cite_start]✅ | [cite: 41, 49] |
-| Add New Customer | [cite_start]✅ | [cite: 42] |
-| Modify Customer Details | [cite_start]✅ | [cite: 43] |
-| Process Loan Applications | [cite_start]✅ | [cite: 44] |
-| Approve / Reject Loans | [cite_start]✅ | [cite: 45] |
-| *Deactivated Acct. Check* | [cite_start]✅ | [cite: 10, 12] |
-| View Assigned Loans | [cite_start]✅ | [cite: 46] |
-| View Customer Transactions | [cite_start]✅ | [cite: 47] |
-| Change Password | [cite_start]✅ | [cite: 48] |
+* **I - Isolation:**
+    * Implemented using the **`fcntl`** system call for file locking.
+    * **Record-Level Locking:** `atomic_update_account` and `atomic_update_user` lock *only* the specific record (byte range) being changed. This allows two users to modify *different* accounts at the same time, providing high throughput.
+    * **File-Level Locking:** A whole-file lock is used when searching or appending (e.g., `generate_new_userId`, `check_uniqueness`) to prevent read/write conflicts during table-level operations.
 
-### 👔 Manager
-| Feature | Status | Source |
-| :--- | :--- | :--- |
-| Login & Secure Logout | [cite_start]✅ | [cite: 52, 57] |
-| Activate / Deactivate Accounts | [cite_start]✅ | [cite: 53] |
-| View Non-Assigned Loans | [cite_start]✅ | [cite: 15] |
-| Assign Loans to Employees | [cite_start]✅ | [cite: 54] |
-| Review Customer Feedback | [cite_start]✅ | [cite: 55] |
-| Change Password | [cite_start]✅ | [cite: 56] |
+* **D - Durability:**
+    * Durability is handled by the operating system's kernel. The `write()` system call guarantees that data is passed to the OS buffer. While `fsync()` is not explicitly called, completed writes will be flushed to disk by the OS, ensuring data persists after the operation is confirmed.
 
-### ⚙️ Administrator
-| Feature | Status | Source |
-| :--- | :--- | :--- |
-| Login & Secure Logout | [cite_start]✅ | [cite: 60, 65] |
-| Add New Bank Employee | [cite_start]✅ | [cite: 61] |
-| Modify User Details | [cite_start]✅ | [cite: 62] |
-| Manage User Roles | [cite_start]✅ | [cite: 63] |
-| Change Password | [cite_start]✅ | [cite: 64] |
+## 🛡️ Robust Error Handling
 
-## 3. File Structure
+The system is hardened against common errors and bad user input.
 
-The project maintains a clean separation of concerns between header files, source code, and persistent data.
-Here is the complete README file, ready to copy and paste.
+* **Input Validation:** All user input is validated on the client-side before being sent to the server.
+    * **Data Type:** `read_valid_double` protects against invalid monetary amounts.
+    * **Format:** `validate_phone` (10 digits), `validate_email` (contains `@` and `.`), and `validate_name_part` (no spaces) are used.
+    * **Empty Input:** `validate_not_empty` is used for all critical fields.
+* **User Experience:**
+    * **Re-prompting:** Invalid input (e.g., bad phone number) re-prompts the user for *just that field* instead of aborting the entire operation.
+* **Concurrency Safety:**
+    * **Race Conditions:** `check_uniqueness` is called within a file lock before creating a new user to prevent two users from being created with the same username, email, or phone.
+* **Orphaned Sessions:**
+    * The server robustly handles unexpected client disconnects (`Ctrl+C`). The `recv_request()` call will fail, causing the client thread to exit. The thread's cleanup logic calls `remove_active_session()`, freeing the user's slot for a new login.
+* **System Call Robustness:**
+    * The return values of `read()` and `write()` are checked in `send_request_and_get_response` to detect server disconnects and prevent partial data sends/receives.
 
-Markdown
+## 📁 Project Structure
+. ├── include/ │ ├── admin_module.h │ ├── client.h │ ├── customer_module.h │ ├── employee_module.h │ ├── manager_module.h │ ├── server.h # Core data structs, constants, & server defs │ └── utils.h # Persistence & auth function defs │ ├── src/ │ ├── admin_module.c │ ├── bootstrap.c # Utility to create initial admin/test users │ ├── client.c # Client application entry point │ ├── customer_module.c │ ├── db_inspector.c # Utility to read .db files for debugging │ ├── employee_module.c │ ├── manager_module.c │ ├── server.c # Server application entry point │ └── utils.c # Logic for file I/O, locking, & hashing │ ├── db/ # (Created by bootstrap) │ ├── accounts.db │ ├── feedback.db │ ├── loans.db │ ├── transactions.db │ └── users.db │ ├── script.sh # Main build script ├── bootstrap # (Compiled) Utility to init database ├── inspector # (Compiled) Utility to read .db files ├── server # (Compiled) Server executable └── client # (Compiled) Client executable
 
-# Banking Management System
+## 🧩 Modules
 
-A high-performance, concurrent banking simulation built in C. This project simulates the core functionalities of a bank, featuring a multi-threaded server that handles multiple clients simultaneously, with a strong focus on data integrity and eliminating race conditions.
+The project is structured into logical modules:
 
-## 1. Core Technical Features
+* **`server.h` / `server.c`:** Core server logic. Handles client connections, threading, login, session management, and dispatches requests to the appropriate role module.
+* **`client.h` / `client.c`:** The user-facing program. Provides menus and handles user input validation.
+* **`utils.h` / `utils.c`:** Handles all direct file I/O, `fcntl` locking, password hashing, and atomic read-modify-write operations.
+* **`customer_module.h` / `.c`:** Implements customer-specific functions (deposit, withdraw, etc.).
+* **`employee_module.h` / `.c`:** Implements employee-specific functions (add customer, approve loan, etc.).
+* **`manager_module.h` / `.c`:** Implements manager-specific functions (assign loan, review feedback, etc.).
+* **`admin_module.h` / `.c`:** Implements admin-specific functions (add employee, modify user, etc.).
+* **`bootstrap.c`:** A command-line tool to initialize the database files and create default users.
+* **`db_inspector.c`:** A command-line tool to safely read and print the contents of the `.db` files for debugging.
 
-This isn't just a simple simulation; it's an exercise in robust, low-level system design.
+## 🚀 How to Compile and Run
 
-* **⚡ True Concurrency with Record-Level Locking:** The system does *not* lock entire database files during transactions. Instead, it uses `fcntl` to implement **record-level locking** on the `users.db`, `accounts.db`, and `loans.db`. This allows two non-conflicting operations (e.g., Customer A depositing and Customer C withdrawing) to execute in parallel, dramatically increasing throughput.
+### 1. Compile
+A build script is provided for easy compilation on a Linux-based system.
 
-* **🛡️ Atomic Read-Modify-Write Operations:** All database modifications (e.g., changing a balance, approving a loan, updating a password) are wrapped in atomic helper functions (`atomic_update_account`, `atomic_update_user`, etc.). This pattern acquires a record lock, reads the data, modifies it, and writes it back as a single, indivisible operation, **guaranteeing no race conditions**.
+1.  **Open Terminal:** Navigate to the project's root directory.
+2.  **Make script executable:**
+    ```bash
+    chmod +x script.sh
+    ```
+3.  **Run the build script:**
+    ```bash
+    ./script.sh
+    ```
+    This will compile all four required executables: `server`, `client`, `bootstrap`, and `inspector`.
 
-* **🖥️ Multi-Threaded Server:** Built with POSIX threads (`pthread`) and Socket Programming, the server can manage simultaneous connections from multiple clients.
+### 2. Run
+You will need at least two terminals.
 
-* **🔐 Secure Authentication & Session Management:**
-    * **Password Hashing:** Passwords are never stored in plaintext. They are securely hashed using `libcrypt`.
-    * [cite_start]**Single Session Enforcement:** The server actively tracks logged-in users and prevents the same account from being logged in more than once at a time. [cite: 29, 41, 52, 60]
+1.  **Initialize Data (Run Once):**
+    * Before starting the server for the first time, run the `bootstrap` utility.
+    ```bash
+    ./bootstrap
+    ```
+    * This will create the `db/` directory and populate it with default users for all roles. It will print the default credentials to the console.
 
-## 2. Features by User Role
+2.  **Terminal 1: Start the Server**
+    ```bash
+    ./server
+    ```
+    *(The server will start and begin listening on port 9090).*
 
-[cite_start]The system enforces a strict separation of duties through four distinct user roles, each with a specific set of permissions. [cite: 26]
+3.  **Terminal 2 (and 3, 4...): Run the Client**
+    ```bash
+    ./client 127.0.0.1
+    ```
+    *(Follow the prompts to log in and use the system).*
 
-### 👤 Customer
-| Feature | Status | Source |
-| :--- | :--- | :--- |
-| Login & Secure Logout | [cite_start]✅ | [cite: 1, 38] |
-| Deactivated Account Check | [cite_start]✅ | [cite: 2] |
-| View Account Balance | [cite_start]✅ | [cite: 30] |
-| Deposit Money (Atomic) | [cite_start]✅ | [cite: 31] |
-| Withdraw Money (Atomic) | [cite_start]✅ | [cite: 32] |
-| Transfer Funds (Atomic) | [cite_start]✅ | [cite: 33] |
-| Apply for Loan | [cite_start]✅ | [cite: 34] |
-| View Loan Status | [cite_start]✅ | [cite: 5] |
-| Add Customer Feedback | [cite_start]✅ | [cite: 36] |
-| View Feedback Status | [cite_start]✅ | [cite: 6] |
-| View Transaction History | [cite_start]✅ | [cite: 37] |
-| Change Password | [cite_start]✅ | [cite: 35] |
+---
+### Default Credentials
 
-### 💼 Bank Employee
-| Feature | Status | Source |
-| :--- | :--- | :--- |
-| Login & Secure Logout | [cite_start]✅ | [cite: 41, 49] |
-| Add New Customer | [cite_start]✅ | [cite: 42] |
-| Modify Customer Details | [cite_start]✅ | [cite: 43] |
-| Process Loan Applications | [cite_start]✅ | [cite: 44] |
-| Approve / Reject Loans | [cite_start]✅ | [cite: 45] |
-| *Deactivated Acct. Check* | [cite_start]✅ | [cite: 10, 12] |
-| View Assigned Loans | [cite_start]✅ | [cite: 46] |
-| View Customer Transactions | [cite_start]✅ | [cite: 47] |
-| Change Password | [cite_start]✅ | [cite: 48] |
+The `bootstrap` utility creates the following users:
 
-### 👔 Manager
-| Feature | Status | Source |
-| :--- | :--- | :--- |
-| Login & Secure Logout | [cite_start]✅ | [cite: 52, 57] |
-| Activate / Deactivate Accounts | [cite_start]✅ | [cite: 53] |
-| View Non-Assigned Loans | [cite_start]✅ | [cite: 15] |
-| Assign Loans to Employees | [cite_start]✅ | [cite: 54] |
-| Review Customer Feedback | [cite_start]✅ | [cite: 55] |
-| Change Password | [cite_start]✅ | [cite: 56] |
-
-### ⚙️ Administrator
-| Feature | Status | Source |
-| :--- | :--- | :--- |
-| Login & Secure Logout | [cite_start]✅ | [cite: 60, 65] |
-| Add New Bank Employee | [cite_start]✅ | [cite: 61] |
-| Modify User Details | [cite_start]✅ | [cite: 62] |
-| Manage User Roles | [cite_start]✅ | [cite: 63] |
-| Change Password | [cite_start]✅ | [cite: 64] |
-
-## 3. File Structure
-
-The project maintains a clean separation of concerns between header files, source code, and persistent data.
-
-. ├── include/ # All header files │ ├── admin_module.h │ ├── banking.h │ ├── client.h │ ├── customer_module.h │ ├── employee_module.h │ ├── manager_module.h │ ├── server.h │ └── utils.h ├── src/ # All source code │ ├── admin_module.c │ ├── client.c │ ├── customer_module.c │ ├── employee_module.c │ ├── manager_module.c │ ├── server.c │ ├── utils.c │ ├── bootstrap.c # Utility to seed the database │ └── db_inspector.c # Utility to read the database ├── db/ # Database files are created here (e.g., users.db) └── script.sh # Build script
-
-## 4. How to Compile and Run
-
-This project requires a `gcc` compiler and the `libcrypt` library (for password hashing).
-
-### Step 1: Compile the Project
-
-Use the provided shell script `script.sh` to compile all executables.
-
-```bash
-# Make the script executable
-chmod +x script.sh
-
-# Run the script
-./script.sh
+| Role | Name (ID) | Username | Password |
+| :--- | :--- | :--- | :--- |
+| Admin | Siddhesh Abhang (1001)| `siddhesh` | `adminpass` |
+| Manager | Manasi Joshi (1002) | `manasi` | `managerpass` |
+| Employee | Prakash Kadam (1003) | `prakash` | `employeepass` |
+| Employee | Smita Pawar (1004) | `smita` | `employeepass` |
+| Customer1| Priya Sawant (1005) | `priya` | `customerpass` |
+| Customer2| Rohan Deshmukh (1006) | `rohan` | `customerpass` |
