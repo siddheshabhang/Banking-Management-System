@@ -82,6 +82,7 @@ The system is hardened against common errors and bad user input.
 * **System Call Robustness:**
     * The return values of `read()` and `write()` are checked in `send_request_and_get_response` to detect server disconnects and prevent partial data sends/receives.
 
+```
 ## 📁 Project Structure
 banking-management-system/
 ├── include/              # Header files (.h) defining interfaces and structures
@@ -113,6 +114,7 @@ banking-management-system/
 ├── inspector             # (Compiled) Utility to read .db files
 ├── server                # (Compiled) Server executable
 └── client                # (Compiled) Client executable
+```
 
 ## 🧩 Modules
 
