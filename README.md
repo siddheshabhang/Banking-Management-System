@@ -83,7 +83,36 @@ The system is hardened against common errors and bad user input.
     * The return values of `read()` and `write()` are checked in `send_request_and_get_response` to detect server disconnects and prevent partial data sends/receives.
 
 ## 📁 Project Structure
-. ├── include/ │ ├── admin_module.h │ ├── client.h │ ├── customer_module.h │ ├── employee_module.h │ ├── manager_module.h │ ├── server.h # Core data structs, constants, & server defs │ └── utils.h # Persistence & auth function defs │ ├── src/ │ ├── admin_module.c │ ├── bootstrap.c # Utility to create initial admin/test users │ ├── client.c # Client application entry point │ ├── customer_module.c │ ├── db_inspector.c # Utility to read .db files for debugging │ ├── employee_module.c │ ├── manager_module.c │ ├── server.c # Server application entry point │ └── utils.c # Logic for file I/O, locking, & hashing │ ├── db/ # (Created by bootstrap) │ ├── accounts.db │ ├── feedback.db │ ├── loans.db │ ├── transactions.db │ └── users.db │ ├── script.sh # Main build script ├── bootstrap # (Compiled) Utility to init database ├── inspector # (Compiled) Utility to read .db files ├── server # (Compiled) Server executable └── client # (Compiled) Client executable
+banking-management-system/
+├── include/              # Header files (.h) defining interfaces and structures
+│   ├── admin_module.h
+│   ├── client.h
+│   ├── customer_module.h
+│   ├── employee_module.h
+│   ├── manager_module.h
+│   ├── server.h          
+│   └── utils.h           
+│
+├── src/                  # Source files (.c) implementing the logic
+│   ├── admin_module.c
+│   ├── bootstrap.c       
+│   ├── client.c          
+│   ├── customer_module.c
+│   ├── db_inspector.c    
+│   ├── employee_module.c
+│   ├── manager_module.c
+│   ├── server.c          
+│   └── utils.c           
+│
+├── db/                   # Data files (.db) - (Created by bootstrap)
+│   └── (Contains .db files like users.db, accounts.db, etc.)
+│
+├── script.sh             # Main build script
+├── README.md             # This file
+├── bootstrap             # (Compiled) Utility to init database
+├── inspector             # (Compiled) Utility to read .db files
+├── server                # (Compiled) Server executable
+└── client                # (Compiled) Client executable
 
 ## 🧩 Modules
 
