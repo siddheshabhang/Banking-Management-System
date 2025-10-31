@@ -23,9 +23,9 @@ void connect_to_server(const char *ip);
 void send_request_and_get_response(int sockfd, request_t *req, response_t *resp);
 
 // --- Menus ---
-void customer_menu(int userId, int sockfd);
-void employee_menu(int userId, int sockfd);
-void manager_menu(int userId, int sockfd);
-void admin_menu(int userId, int sockfd);
+void customer_menu(int userId, int sockfd, const char* userName);
+void employee_menu(int userId, int sockfd, const char* userName);
+void manager_menu(int userId, int sockfd, const char* userName);
+void admin_menu(int userId, int sockfd, const char* userName);
 
 #endif /* CLIENT_H */

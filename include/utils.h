@@ -42,7 +42,7 @@ int write_feedback(feedback_rec_t *fb);
 int read_feedback(uint64_t fbId, feedback_rec_t *fb);
 
 // --- Security & Auth (CRITICAL FIX: Hashing) ---
-int login_user(const char *username, const char *password, int *userId, char *role, size_t role_sz);
+int login_user(const char *username, const char *password, int *userId, char *role, size_t role_sz, char *name_out, size_t name_sz);
 void generate_password_hash(const char *password, char *hash_output, size_t hash_size);
 int verify_password(const char *password, const char *hash);
 

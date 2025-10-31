@@ -70,20 +70,23 @@ void *client_thread_main(void *arg) {
         char *payload = req.payload;
 
         // --- Login / Logout / Password (FIXED: Single Session and Deactivated Check) ---
+        // --- Login / Logout / Password (UI UPDATE: Now returns name) ---
         if(strcmp(op,"LOGIN")==0) {
             char username[MAX_USERNAME_LEN],password[MAX_PASSWORD_LEN];
             sscanf(payload,"%s %s",username,password);
-            int userId; char role[MAX_ROLE_STR];
-            int login_result; // 0=Fail, 1=Success, 2=Deactivated (requires utils.c update)
+            int userId; 
+            char role[MAX_ROLE_STR];
+            char name[MAX_NAME_LEN]; // <-- NEW
+            int login_result; 
 
-            // Attempt login and get status
-            login_result = login_user(username,password,&userId,role,sizeof(role));
+            // Attempt login and get status (and name)
+            login_result = login_user(username, password, &userId, role, sizeof(role), name, sizeof(name)); // <-- UPDATED
 
             if (login_result == 2) { // Account is deactivated
                 snprintf(resp.message,sizeof(resp.message),"FAILURE Account is deactivated. Contact your bank.");
             }
             else if (login_result == 1) { // Successful password and active status
-                // START CONCURRENCY CHECK: Is the user already logged in?
+                // START CONCURRENCY CHECK
                 pthread_mutex_lock(&g_server_ctx.db_lock);
                 int already_logged_in = 0;
                 for (int i = 0; i < MAX_SESSIONS; i++) {
@@ -101,12 +104,14 @@ void *client_thread_main(void *arg) {
                     for (int i = 0; i < MAX_SESSIONS; i++) {
                         if (active_sessions[i] == 0) {
                             active_sessions[i] = userId;
-                            current_userId = userId; // Store ID for thread cleanup
+                            current_userId = userId; 
                             break;
                         }
                     }
                     pthread_mutex_unlock(&g_server_ctx.db_lock);
-                    snprintf(resp.message,sizeof(resp.message),"SUCCESS %d %s",userId,role);
+                    
+                    // UPDATED RESPONSE FORMAT: "SUCCESS <id> <role>|<name>"
+                    snprintf(resp.message,sizeof(resp.message),"SUCCESS %d %s|%s", userId, role, name);
                 }
                 // END CONCURRENCY CHECK
             }

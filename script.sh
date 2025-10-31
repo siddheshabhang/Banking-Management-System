@@ -6,6 +6,9 @@ gcc -o server src/server.c src/utils.c src/customer_module.c src/employee_module
 # Compile client.c 
 gcc -o client src/client.c -Iinclude
 
+# Compile boostrap.c
+gcc -o bootstrap src/bootstrap.c src/admin_module.c src/utils.c src/employee_module.c src/customer_module.c -Iinclude
+
 #Compile inspector.c
 gcc -o inspector src/db_inspector.c -Iinclude
 

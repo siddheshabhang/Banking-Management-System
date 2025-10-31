@@ -95,13 +95,17 @@ int verify_password(const char *password, const char *hash) {
 }
 
 // --- User Login Function with Account Status Check (CRITICAL FIX) ---
-int login_user(const char *username, const char *password, int *userId, char *role, size_t role_sz) {
+// Updated to return the user's name
+int login_user(const char *username, const char *password, int *userId, char *role, size_t role_sz, char *name_out, size_t name_sz) {
     int fd = open(USERS_DB_FILE, O_RDONLY);
     if (fd < 0) return 0;
     
-    lock_file(fd);  // Full file lock is fine for login/users table
-    user_rec_t user;  // We use 'found = 1' for SUCCESS, 'found = 2' for INACTIVE, and 'found = 0' for FAILURE.
+    lock_file(fd);
+    user_rec_t user;
     int found = 0; 
+    
+    // Clear the name buffer
+    name_out[0] = '\0';
 
     while (read(fd, &user, sizeof(user_rec_t)) == sizeof(user_rec_t)) {
         if (strcmp(user.username, username) == 0) {
@@ -109,7 +113,6 @@ int login_user(const char *username, const char *password, int *userId, char *ro
             if (verify_password(password, user.password_hash)) {
                 
                 account_rec_t acc;
-                // read_account locks/unlocks the accounts file itself
                 int account_found = read_account(user.user_id, &acc);
 
                 if (user.active == STATUS_INACTIVE || (account_found && acc.active == STATUS_INACTIVE)) {
@@ -117,6 +120,10 @@ int login_user(const char *username, const char *password, int *userId, char *ro
                 } else {
                     *userId = user.user_id;
                     
+                    // Copy the name out
+                    strncpy(name_out, user.name, name_sz - 1);
+                    
+                    // Map role enum to string
                     if (user.role == ROLE_CUSTOMER) strncpy(role, "customer", role_sz);
                     else if (user.role == ROLE_EMPLOYEE) strncpy(role, "employee", role_sz);
                     else if (user.role == ROLE_MANAGER) strncpy(role, "manager", role_sz);

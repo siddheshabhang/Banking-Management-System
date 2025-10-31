@@ -120,8 +120,8 @@ int main() {
 
     printf("\n--- Bootstrapping Complete ---\n");
     printf("%d out of 7 initial users successfully created.\n", success_count);
-    
-    if (success_count == 5) {
+
+    if (success_count == 7) {
         printf("\nDefault Credentials for Testing:\n");
         printf("Role     | Name (ID)             | Username  | Password\n");
         printf("---------|-----------------------|-----------|-------------\n");

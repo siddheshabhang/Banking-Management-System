@@ -37,13 +37,13 @@ void read_line(char *buffer, int size) {
 }
 
 // Customer Menu
-void customer_menu(int userId, int sockfd) {
+void customer_menu(int userId, int sockfd, const char* userName) {
     int choice;
     request_t req;
     response_t resp;
 
     while (1) {
-        printf("\n--- Customer Menu (ID: %d) ---\n", userId);
+        printf("\n--- Customer Menu (Acct No: AC%d) ---\n", userId);
         printf("1. View Balance\n2. Deposit Money\n3. Withdraw Money\n4. Transfer Funds\n");
         printf("5. Apply Loan\n6. View Loan Status\n7. Add Feedback\n8. View Feedback Status\n");
         printf("9. View Transaction History\n10. Change Password\n11. Logout\n");
@@ -88,8 +88,14 @@ void customer_menu(int userId, int sockfd) {
                 {
                     int toId;
                     double amount;
-                    printf("Enter recipient userId: ");
-                    scanf("%d", &toId);
+                    char acct_str[32];
+                    printf("Enter recipient Account No (e.g., AC1005): ");
+                    read_line(acct_str, sizeof(acct_str));
+                    if (acct_str[0] == 'A' || acct_str[0] == 'a') {
+                        toId = atoi(acct_str + 2); 
+                    } else {
+                        toId = atoi(acct_str);
+                    }
                     printf("Enter amount: ");
                     scanf("%lf", &amount);
                     clear_stdin();
@@ -154,13 +160,13 @@ void customer_menu(int userId, int sockfd) {
 }
 
 // Employee Menu
-void employee_menu(int userId, int sockfd) {
+void employee_menu(int userId, int sockfd, const char* userName) {
     int choice;
     request_t req;
     response_t resp;
 
     while (1) {
-        printf("\n--- Employee Menu (ID: %d) ---\n", userId);
+        printf("\n--- Employee Menu (User: %s, ID: %d) ---\n", userName, userId);
         printf("1. Add New Customer\n2. Modify Customer Details\n3. View Pending Loans\n");
         printf("4. Approve/Reject Loans\n5. View Assigned Loans\n6. View Customer Transactions\n");
         printf("7. Change Password\n8. Logout\n");
@@ -201,9 +207,15 @@ void employee_menu(int userId, int sockfd) {
                 {
                     int custId;
                     char name[MAX_NAME_LEN], address[MAX_ADDR_LEN];
+                    char acct_str[32];
                     int age;
-                    printf("Enter customer userId: ");
-                    scanf("%d", &custId);
+                    printf("Enter customer Account No (e.g., AC1004): ");
+                    read_line(acct_str, sizeof(acct_str));
+                    if (acct_str[0] == 'A' || acct_str[0] == 'a') {
+                        custId = atoi(acct_str + 2);
+                    } else {
+                        custId = atoi(acct_str);
+                    }
                     clear_stdin();
                     printf("Enter new name (no spaces): ");
                     read_line(name, sizeof(name));
@@ -246,8 +258,14 @@ void employee_menu(int userId, int sockfd) {
             case 6:
                 {
                     int custId;
-                    printf("Enter customer ID: ");
-                    scanf("%d", &custId);
+                    char acct_str[32];
+                    printf("Enter customer Account No (e.g., AC1004): ");
+                    read_line(acct_str, sizeof(acct_str));
+                    if (acct_str[0] == 'A' || acct_str[0] == 'a') {
+                        custId = atoi(acct_str + 2);
+                    } else {
+                        custId = atoi(acct_str);
+                    }
                     clear_stdin();
                     strcpy(req.op, "VIEW_CUST_TRANSACTIONS");
                     snprintf(req.payload, sizeof(req.payload), "%u", custId);
@@ -279,13 +297,13 @@ void employee_menu(int userId, int sockfd) {
 }
 
 // Manager Menu
-void manager_menu(int userId, int sockfd) {
+void manager_menu(int userId, int sockfd, const char* userName) {
     int choice;
     request_t req;
     response_t resp;
 
     while(1) {
-        printf("\n--- Manager Menu (ID: %d) ---\n", userId);
+        printf("\n--- Manager Menu (User: %s, ID: %d) ---\n", userName, userId);
         printf("1. Activate/Deactivate Customer Account\n2. View Non-Assigned Loans\n");
         printf("3. Assign Loan to Employee\n4. Review Customer Feedback\n");
         printf("5. Change Password\n6. Logout\n");
@@ -305,8 +323,14 @@ void manager_menu(int userId, int sockfd) {
             case 1:
                 {
                     int custId, status;
-                    printf("Enter customer ID: ");
-                    scanf("%d", &custId);
+                    char acct_str[32];
+                    printf("Enter customer Account No (e.g., AC1004): ");
+                    read_line(acct_str, sizeof(acct_str));
+                    if (acct_str[0] == 'A' || acct_str[0] == 'a') {
+                        custId = atoi(acct_str + 2);
+                    } else {
+                        custId = atoi(acct_str);
+                    }
                     printf("Activate (1) / Deactivate (0): ");
                     scanf("%d", &status);
                     clear_stdin();
@@ -358,13 +382,13 @@ void manager_menu(int userId, int sockfd) {
 }
 
 // Admin Menu
-void admin_menu(int userId, int sockfd) {
+void admin_menu(int userId, int sockfd, const char* userName) {
     int choice;
     request_t req;
     response_t resp;
 
     while(1) {
-        printf("\n--- Admin Menu (ID: %d) ---\n", userId);
+        printf("\n--- Admin Menu (User: %s, ID: %d) ---\n", userName, userId);
         printf("1. Add New Bank Employee\n2. Modify User Details\n");
         printf("3. Manage User Roles\n4. Change Password\n5. Logout\n");
         printf("Enter choice: ");
@@ -502,11 +526,12 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
     
-    printf("\n\t*** WELCOME TO THE BANK! ***\n");
+    printf("\n\t***** WELCOME TO THE BANK! *****\n");
     printf("Connected to server at %s\n", argv[1]);
 
     int userId = 0; // Initialize userId outside the loop
     char role[MAX_ROLE_STR] = {0};
+    char name[MAX_NAME_LEN] = {0};
     request_t req;
     response_t resp;
 
@@ -550,7 +575,7 @@ int main(int argc, char *argv[]) {
         send_request_and_get_response(sockfd, &req, &resp);
 
         // Check Server Response and Validate Role
-        if (sscanf(resp.message, "SUCCESS %d %s", &userId, role) == 2) {
+        if (sscanf(resp.message, "SUCCESS %d %[^|]|%[^\n]", &userId, role, name) == 3) {
             
             // Check if the role matches the selected choice (optional but good practice)
             int valid_role = 0;
@@ -560,8 +585,14 @@ int main(int argc, char *argv[]) {
             if (choice == 4 && strcmp(role, "admin") == 0) valid_role = 1;
 
             if (valid_role) {
-                printf("Login successful! Role: %s\n", role);
-                break; // Exit the login loop
+                printf("\n==================================\n");
+                printf("Login successful! Welcome, %s!\n", name); // <-- WELCOME MESSAGE
+                
+                if(choice == 1) { // If they are a customer
+                    printf("Account Number: AC%d\n", userId); // <-- ACCOUNT NUMBER
+                }
+                printf("==================================\n");
+                break;
             } else {
                 printf("Login failed: Credentials are valid, but the role '%s' does not match selection.\n", role);
                 userId = 0; // Reset to force re-login
@@ -575,10 +606,10 @@ int main(int argc, char *argv[]) {
 
     // --- Role-Specific Menu Dispatch (Starts here) ---
     if (userId != 0) {
-        if(strcmp(role, "customer") == 0) customer_menu(userId, sockfd);
-        else if(strcmp(role, "employee") == 0) employee_menu(userId, sockfd);
-        else if(strcmp(role, "manager") == 0) manager_menu(userId, sockfd);
-        else if(strcmp(role, "admin") == 0) admin_menu(userId, sockfd);
+        if(strcmp(role, "customer") == 0) customer_menu(userId, sockfd, name);
+        else if(strcmp(role, "employee") == 0) employee_menu(userId, sockfd, name);
+        else if(strcmp(role, "manager") == 0) manager_menu(userId, sockfd, name);
+        else if(strcmp(role, "admin") == 0) admin_menu(userId, sockfd, name);
         else printf("Unknown role received from server.\n");
     }
 
