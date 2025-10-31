@@ -17,10 +17,3 @@ echo "  Banking-Management-System compiled successfully!!!   "
 echo "######################################################"
 
 
-#echo "  Starting the Bank Server  "
-#read -p "  Enter port number for Server:  " PORT
-#echo
-
-#echo "  Starting the server on port $PORT..."
-#./server PORT
-
