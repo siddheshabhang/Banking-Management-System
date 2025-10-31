@@ -4,28 +4,76 @@
 #include <string.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <unistd.h> // for lseek
-#include <fcntl.h> // for O_RDONLY
+#include <unistd.h> 
+#include <fcntl.h> 
 
+// --- Modifier for set_account_status ---
+int set_status_modifier(account_rec_t *acc, void *data) {
+    int new_status = *(int*)data;
+    acc->active = (new_status == 1) ? STATUS_ACTIVE : STATUS_INACTIVE;
+    return 1; // Always succeed
+}
+
+// --- REFACTORED set_account_status ---
 int set_account_status(uint32_t custId, int status, char *resp_msg, size_t resp_sz) {
-    account_rec_t acc;
-    if(!read_account(custId, &acc)) {
-        snprintf(resp_msg, resp_sz, "Account not found");
-        return 0;
+    // This was a race condition in your original code. Now it's atomic.
+    if (atomic_update_account(custId, set_status_modifier, &status)) {
+         snprintf(resp_msg, resp_sz, "Account %u Status Updated to: %s", custId, (status == 1) ? "ACTIVE" : "INACTIVE");
+         return 1;
     }
-    
-    // Ensure status is either 0 or 1
-    acc.active = (status == 1) ? STATUS_ACTIVE : STATUS_INACTIVE;
-    
-    if(write_account(&acc)) {
-        snprintf(resp_msg, resp_sz, "Account %u Status Updated to: %s", custId, acc.active ? "ACTIVE" : "INACTIVE");
-        return 1;
-    }
-    
-    snprintf(resp_msg, resp_sz, "Account Status Update Failed (Write Error)");
+
+    snprintf(resp_msg, resp_sz, "Account Status Update Failed (Account not found)");
     return 0;
 }
 
+
+// --- Modifier for assign_loan_to_employee ---
+typedef struct {
+    uint32_t empId;
+    char *resp_msg;
+    size_t resp_sz;
+} assign_loan_data;
+
+int assign_loan_modifier(loan_rec_t *loan, void *data) {
+    assign_loan_data *d = (assign_loan_data*)data;
+
+    if (loan->status != LOAN_PENDING) {
+        snprintf(d->resp_msg, d->resp_sz, "Loan is not pending, cannot assign."); 
+        return 0; // Abort modification
+    }
+    
+    // Check if empId is a valid employee
+    user_rec_t emp;
+    if(!read_user(d->empId, &emp) || emp.role != ROLE_EMPLOYEE) {
+        snprintf(d->resp_msg, d->resp_sz, "Employee ID %u not found or is not an employee.", d->empId); 
+        return 0; // Abort modification
+    }
+
+    loan->assigned_to = d->empId;
+    loan->status = LOAN_ASSIGNED; // Update status
+    
+    snprintf(d->resp_msg, d->resp_sz, "Loan %llu Assigned to Employee %u", (unsigned long long)loan->loan_id, d->empId);
+    return 1; // Commit modification
+}
+
+// --- REFACTORED assign_loan_to_employee ---
+int assign_loan_to_employee(uint32_t loanId, uint32_t empId, char *resp_msg, size_t resp_sz) {
+    assign_loan_data data = {empId, resp_msg, resp_sz};
+    
+    if (atomic_update_loan(loanId, assign_loan_modifier, &data)) {
+        return 1; // Success, resp_msg was set by modifier
+    }
+    
+    if (resp_msg[0] == '\0') {
+        snprintf(resp_msg, resp_sz, "Loan Assignment Failed (Loan not found or concurrency error)");
+    }
+    return 0;
+}
+
+
+// --- (Other functions remain the same) ---
+
+// This function is safe (read-only list)
 int view_non_assigned_loans(char *resp_msg, size_t resp_sz) {
     int fd = open(LOANS_DB_FILE,O_RDONLY);
     if(fd<0) { snprintf(resp_msg,resp_sz,"No loans file found"); return 0; }
@@ -57,37 +105,7 @@ int view_non_assigned_loans(char *resp_msg, size_t resp_sz) {
     return 1;
 }
 
-int assign_loan_to_employee(uint32_t loanId, uint32_t empId, char *resp_msg, size_t resp_sz) {
-    loan_rec_t loan;
-    if(!read_loan(loanId,&loan)) { 
-        snprintf(resp_msg,resp_sz,"Loan ID %u not found", loanId); 
-        return 0; 
-    }
-    
-    if (loan.status != LOAN_PENDING) {
-        snprintf(resp_msg,resp_sz,"Loan is not pending, cannot assign."); 
-        return 0;
-    }
-    
-    // Check if empId is a valid employee
-    user_rec_t emp;
-    if(!read_user(empId, &emp) || emp.role != ROLE_EMPLOYEE) {
-        snprintf(resp_msg,resp_sz,"Employee ID %u not found or is not an employee.", empId); 
-        return 0;
-    }
-
-    loan.assigned_to = empId;
-    loan.status = LOAN_ASSIGNED; // Update status
-    
-    if(write_loan(&loan)) {
-        snprintf(resp_msg,resp_sz,"Loan %u Assigned to Employee %u", loanId, empId);
-        return 1;
-    }
-    
-    snprintf(resp_msg,resp_sz,"Loan Assignment Failed (Write Error)");
-    return 0;
-}
-
+// This function is safe (already atomic)
 int review_feedbacks(char *resp_msg, size_t resp_sz) {
     int fd = open(FEEDBACK_DB_FILE,O_RDWR);
     if(fd<0) { snprintf(resp_msg,resp_sz,"No feedback file found"); return 0; }
@@ -103,17 +121,15 @@ int review_feedbacks(char *resp_msg, size_t resp_sz) {
     while(read(fd,&fb,sizeof(feedback_rec_t))==sizeof(feedback_rec_t)) {
         if(fb.reviewed == 0) {
             
-            // Append to response message
             char tmp[600];
             snprintf(tmp, sizeof(tmp), "ID: %llu, User: %u, Msg: \"%.100s\"\n",
                 (unsigned long long)fb.fb_id, fb.user_id, fb.message);
             strncat(resp_msg, tmp, resp_sz - strlen(resp_msg) - 1);
 
-            // Mark as reviewed and write back
             fb.reviewed=1;
-            lseek(fd, pos, SEEK_SET); // Go back to the start of this record
+            lseek(fd, pos, SEEK_SET); 
             write(fd, &fb, sizeof(feedback_rec_t));
-            lseek(fd, pos + sizeof(feedback_rec_t), SEEK_SET); // Move to next record
+            lseek(fd, pos + sizeof(feedback_rec_t), SEEK_SET); 
             
             reviewed_count++;
         }

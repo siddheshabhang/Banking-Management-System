@@ -1,19 +1,41 @@
 #include "utils.h"
 #include <sys/file.h>
-#include <unistd.h> // For crypt() on macOS // For password hashing! Link with -lcrypt
+#include <unistd.h> // For crypt() on macOS
 
-// Acquire exclusive lock on file
+/*
+ * ===================================================================
+ * HELPER PROTOTYPES
+ * (These are internal to utils.c and don't need to be in utils.h)
+ * ===================================================================
+ */
+
+// Generic record locking
+static int lock_record(int fd, long offset, size_t record_size);
+static int unlock_record(int fd, long offset, size_t record_size);
+
+// Finders
+static long find_user_offset(uint32_t userId);
+static long find_account_offset(uint32_t userId);
+static long find_loan_offset(uint64_t loanId);
+
+/*
+ * ===================================================================
+ * GENERIC LOCKING FUNCTIONS
+ * ===================================================================
+ */
+
+// Acquire exclusive lock on ENTIRE file
 int lock_file(int fd) {
     struct flock lock;
     memset(&lock, 0, sizeof(lock));
     lock.l_type = F_WRLCK;
     lock.l_whence = SEEK_SET;
     lock.l_start = 0;
-    lock.l_len = 0; // lock entire file
+    lock.l_len = 0; // 0 means to lock to EOF
     return fcntl(fd, F_SETLKW, &lock);
 }
 
-// Unlock file
+// Unlock ENTIRE file
 int unlock_file(int fd) {
     struct flock lock;
     memset(&lock, 0, sizeof(lock));
@@ -24,14 +46,37 @@ int unlock_file(int fd) {
     return fcntl(fd, F_SETLKW, &lock);
 }
 
-// --- Hashing Functions (CRITICAL SECURITY FIX) ---
+// --- Lock a single record for exclusive access (Write Lock) ---
+static int lock_record(int fd, long offset, size_t record_size) {
+    struct flock lock;
+    memset(&lock, 0, sizeof(lock));
+    lock.l_type = F_WRLCK; // Exclusive Write Lock
+    lock.l_whence = SEEK_SET;
+    lock.l_start = offset;
+    lock.l_len = record_size; // Lock ONLY the size of one record
+    return fcntl(fd, F_SETLKW, &lock); 
+}
+
+// --- Unlock a single record ---
+static int unlock_record(int fd, long offset, size_t record_size) {
+    struct flock lock;
+    memset(&lock, 0, sizeof(lock));
+    lock.l_type = F_UNLCK; 
+    lock.l_whence = SEEK_SET;
+    lock.l_start = offset;
+    lock.l_len = record_size; 
+    return fcntl(fd, F_SETLKW, &lock);
+}
+
+/*
+ * ===================================================================
+ * AUTH & HASHING
+ * ===================================================================
+ */
 
 // Generate hash of password
 void generate_password_hash(const char *password, char *hash_output, size_t hash_size) {
-    // Using SHA-512. The salt should be random and stored with the hash in a real app.
-    // For this project, we'll use a simple, constant salt.
     const char *salt = "$6$IIITB$"; // $6$ denotes SHA-512
-    
     char *hashed = crypt(password, salt);
     if (hashed) {
         strncpy(hash_output, hashed, hash_size - 1);
@@ -48,14 +93,14 @@ int verify_password(const char *password, const char *hash) {
     if (!verified_hash) return 0;
     return (strcmp(verified_hash, hash) == 0);
 }
+
 // --- User Login Function with Account Status Check (CRITICAL FIX) ---
 int login_user(const char *username, const char *password, int *userId, char *role, size_t role_sz) {
     int fd = open(USERS_DB_FILE, O_RDONLY);
     if (fd < 0) return 0;
     
-    lock_file(fd);
-    user_rec_t user;
-    // We use 'found = 1' for SUCCESS, 'found = 2' for INACTIVE, and 'found = 0' for FAILURE.
+    lock_file(fd);  // Full file lock is fine for login/users table
+    user_rec_t user;  // We use 'found = 1' for SUCCESS, 'found = 2' for INACTIVE, and 'found = 0' for FAILURE.
     int found = 0; 
 
     while (read(fd, &user, sizeof(user_rec_t)) == sizeof(user_rec_t)) {
@@ -63,18 +108,15 @@ int login_user(const char *username, const char *password, int *userId, char *ro
             
             if (verify_password(password, user.password_hash)) {
                 
-                // NEW: Read the account record to check account status
                 account_rec_t acc;
+                // read_account locks/unlocks the accounts file itself
                 int account_found = read_account(user.user_id, &acc);
 
-                // FIX: Deny login if USER is INACTIVE OR ACCOUNT is INACTIVE
-                // We assume 'read_account' success means the account exists, otherwise we only check user status.
                 if (user.active == STATUS_INACTIVE || (account_found && acc.active == STATUS_INACTIVE)) {
                     found = 2; // Inactive
                 } else {
                     *userId = user.user_id;
                     
-                    // Map role enum to string for client output
                     if (user.role == ROLE_CUSTOMER) strncpy(role, "customer", role_sz);
                     else if (user.role == ROLE_EMPLOYEE) strncpy(role, "employee", role_sz);
                     else if (user.role == ROLE_MANAGER) strncpy(role, "manager", role_sz);
@@ -84,7 +126,7 @@ int login_user(const char *username, const char *password, int *userId, char *ro
                     found = 1; // SUCCESS
                 }
             }
-            break; // Username is unique
+            break; 
         }
     }
     unlock_file(fd);
@@ -92,45 +134,174 @@ int login_user(const char *username, const char *password, int *userId, char *ro
     return found;
 }
 
-// --- Concurrency FIX: Atomic Read-Modify-Write for Account (CRITICAL FIX) ---
-// This ensures that the entire read/modify/write operation is protected by a single lock.
-int atomic_update_account(int userId, int (*modifier)(account_rec_t *acc, void *data), void *modifier_data) {
-    int fd = open(ACCOUNTS_DB_FILE, O_RDWR);
+/*
+ * ===================================================================
+ * NEW ATOMIC R-M-W HANDLERS
+ * ===================================================================
+ */
+// --- Offset Finder for Users ---
+static long find_user_offset(uint32_t userId) {
+    int fd = open(USERS_DB_FILE, O_RDONLY);
+    if (fd < 0) return -1;
+    lock_file(fd); // Full file lock to safely search
+    user_rec_t tmp;
+    long current_offset = 0;
+    long found_offset = -1;
+    while (read(fd, &tmp, sizeof(user_rec_t)) == sizeof(user_rec_t)) {
+        if (tmp.user_id == userId) {
+            found_offset = current_offset;
+            break; 
+        }
+        current_offset += sizeof(user_rec_t); 
+    }
+    unlock_file(fd);
+    close(fd);
+    return found_offset;
+}
+
+// --- Atomic R-M-W for users.db ---
+int atomic_update_user(uint32_t userId, int (*modifier)(user_rec_t *user, void *data), void *modifier_data) {
+    long offset = find_user_offset(userId);
+    if (offset < 0) return 0; // Not found
+    
+    int fd = open(USERS_DB_FILE, O_RDWR);
     if (fd < 0) return 0;
 
-    lock_file(fd);
-    account_rec_t tmp;
-    off_t pos = 0;
-    int success = 0;
-
-    while (read(fd, &tmp, sizeof(account_rec_t)) == sizeof(account_rec_t)) {
-        if (tmp.user_id == userId) {
-            // Found the account. Now attempt to modify it.
-            if (modifier(&tmp, modifier_data)) {
-                // Modification successful, now write back.
-                lseek(fd, pos, SEEK_SET); // Seek back to start of record
-                if (write(fd, &tmp, sizeof(account_rec_t)) == sizeof(account_rec_t)) {
-                    success = 1;
-                }
-            }
-            break; // Stop loop once user is found (modified or not)
-        }
-        pos += sizeof(account_rec_t);
+    if (lock_record(fd, offset, sizeof(user_rec_t)) != 0) {
+        close(fd); return 0; // Lock failed
     }
 
-    unlock_file(fd);
+    int success = 0;
+    user_rec_t tmp;
+    
+    lseek(fd, offset, SEEK_SET); 
+    if (read(fd, &tmp, sizeof(user_rec_t)) == sizeof(user_rec_t)) {
+        if (modifier(&tmp, modifier_data)) {
+            lseek(fd, offset, SEEK_SET); 
+            if (write(fd, &tmp, sizeof(user_rec_t)) == sizeof(user_rec_t)) {
+                success = 1;
+            }
+        }
+    }
+
+    unlock_record(fd, offset, sizeof(user_rec_t));
     close(fd);
     return success;
 }
 
-// --- Persistence Helpers (Updated to use consistent naming) ---
+// --- Offset Finder for Accounts ---
+static long find_account_offset(uint32_t userId) {
+    int fd = open(ACCOUNTS_DB_FILE, O_RDONLY);
+    if (fd < 0) return -1;
+    lock_file(fd); // Full file lock to safely search
+    account_rec_t tmp;
+    long current_offset = 0;
+    long found_offset = -1;
+    while (read(fd, &tmp, sizeof(account_rec_t)) == sizeof(account_rec_t)) {
+        if (tmp.user_id == userId) {
+            found_offset = current_offset;
+            break; 
+        }
+        current_offset += sizeof(account_rec_t); 
+    }
+    unlock_file(fd);
+    close(fd);
+    return found_offset;
+}
+
+// --- Atomic R-M-W for accounts.db ---
+int atomic_update_account(uint32_t userId, int (*modifier)(account_rec_t *acc, void *data), void *modifier_data) {
+    long offset = find_account_offset(userId);
+    if (offset < 0) return 0; // Not found
+    
+    int fd = open(ACCOUNTS_DB_FILE, O_RDWR);
+    if (fd < 0) return 0;
+
+    if (lock_record(fd, offset, sizeof(account_rec_t)) != 0) {
+        close(fd); return 0; // Lock failed
+    }
+
+    int success = 0;
+    account_rec_t tmp;
+    
+    lseek(fd, offset, SEEK_SET); 
+    if (read(fd, &tmp, sizeof(account_rec_t)) == sizeof(account_rec_t)) {
+        if (modifier(&tmp, modifier_data)) {
+            lseek(fd, offset, SEEK_SET); 
+            if (write(fd, &tmp, sizeof(account_rec_t)) == sizeof(account_rec_t)) {
+                success = 1;
+            }
+        }
+    }
+
+    unlock_record(fd, offset, sizeof(account_rec_t));
+    close(fd);
+    return success;
+}
+
+// --- Offset Finder for Loans ---
+static long find_loan_offset(uint64_t loanId) {
+    int fd = open(LOANS_DB_FILE, O_RDONLY);
+    if (fd < 0) return -1;
+    lock_file(fd); // Full file lock to safely search
+    loan_rec_t tmp;
+    long current_offset = 0;
+    long found_offset = -1;
+    while (read(fd, &tmp, sizeof(loan_rec_t)) == sizeof(loan_rec_t)) {
+        if (tmp.loan_id == loanId) {
+            found_offset = current_offset;
+            break; 
+        }
+        current_offset += sizeof(loan_rec_t); 
+    }
+    unlock_file(fd);
+    close(fd);
+    return found_offset;
+}
+
+// --- Atomic R-M-W for loans.db ---
+int atomic_update_loan(uint64_t loanId, int (*modifier)(loan_rec_t *loan, void *data), void *modifier_data) {
+    long offset = find_loan_offset(loanId);
+    if (offset < 0) return 0; // Not found
+    
+    int fd = open(LOANS_DB_FILE, O_RDWR);
+    if (fd < 0) return 0;
+
+    if (lock_record(fd, offset, sizeof(loan_rec_t)) != 0) {
+        close(fd); return 0; // Lock failed
+    }
+
+    int success = 0;
+    loan_rec_t tmp;
+    
+    lseek(fd, offset, SEEK_SET); 
+    if (read(fd, &tmp, sizeof(loan_rec_t)) == sizeof(loan_rec_t)) {
+        if (modifier(&tmp, modifier_data)) {
+            lseek(fd, offset, SEEK_SET); 
+            if (write(fd, &tmp, sizeof(loan_rec_t)) == sizeof(loan_rec_t)) {
+                success = 1;
+            }
+        }
+    }
+
+    unlock_record(fd, offset, sizeof(loan_rec_t));
+    close(fd);
+    return success;
+}
+
+
+/*
+ * ===================================================================
+ * NON-ATOMIC PERSISTENCE HELPERS
+ * (Used for login, bootstrap, appends, and non-racy operations)
+ * ===================================================================
+ */
 
 // Read account
 int read_account(int userId, account_rec_t *acc) {
     int fd = open(ACCOUNTS_DB_FILE, O_RDONLY);
     if(fd < 0) return 0;
-
-    lock_file(fd);
+    lock_file(fd); // Full file lock
     account_rec_t tmp;
     int found = 0;
     while(read(fd, &tmp, sizeof(account_rec_t)) == sizeof(account_rec_t)) {
@@ -145,12 +316,11 @@ int read_account(int userId, account_rec_t *acc) {
     return found;
 }
 
-// Write account (update existing)
+// Write account (update existing or append)
 int write_account(account_rec_t *acc) {
     int fd = open(ACCOUNTS_DB_FILE, O_RDWR | O_CREAT, 0666);
     if(fd < 0) return 0;
-
-    lock_file(fd);
+    lock_file(fd); // Full file lock
     account_rec_t tmp;
     off_t pos = 0;
     int found = 0;
@@ -163,12 +333,10 @@ int write_account(account_rec_t *acc) {
         }
         pos += sizeof(account_rec_t);
     }
-    
-    if (!found) { // Append if not found (for new customer)
+    if (!found) { 
         lseek(fd, 0, SEEK_END);
         write(fd, acc, sizeof(account_rec_t));
     }
-    
     unlock_file(fd);
     close(fd);
     return 1;
@@ -178,8 +346,7 @@ int write_account(account_rec_t *acc) {
 int read_user(int userId, user_rec_t *user) {
     int fd = open(USERS_DB_FILE, O_RDONLY);
     if(fd < 0) return 0;
-
-    lock_file(fd);
+    lock_file(fd); // Full file lock
     user_rec_t tmp;
     int found = 0;
     while(read(fd, &tmp, sizeof(user_rec_t)) == sizeof(user_rec_t)) {
@@ -194,12 +361,11 @@ int read_user(int userId, user_rec_t *user) {
     return found;
 }
 
-// Write user (update existing)
+// Write user (update existing or append)
 int write_user(user_rec_t *user) {
     int fd = open(USERS_DB_FILE, O_RDWR | O_CREAT, 0666);
     if(fd < 0) return 0;
-
-    lock_file(fd);
+    lock_file(fd); // Full file lock
     user_rec_t tmp;
     off_t pos = 0;
     int found = 0;
@@ -212,12 +378,10 @@ int write_user(user_rec_t *user) {
         }
         pos += sizeof(user_rec_t);
     }
-    
-    if (!found) { // Append if not found (for new user)
+    if (!found) { 
         lseek(fd, 0, SEEK_END);
         write(fd, user, sizeof(user_rec_t));
     }
-
     unlock_file(fd);
     close(fd);
     return 1;
@@ -227,9 +391,7 @@ int write_user(user_rec_t *user) {
 int append_transaction(txn_rec_t *tx) {
     int fd = open(TRANSACTIONS_DB_FILE, O_WRONLY | O_APPEND | O_CREAT, 0666);
     if(fd < 0) return 0;
-
-    lock_file(fd);
-    // Simple ID generation
+    lock_file(fd); // Full file lock
     tx->txn_id = lseek(fd, 0, SEEK_END) / sizeof(txn_rec_t) + 1;
     write(fd, tx, sizeof(txn_rec_t));
     unlock_file(fd);
@@ -241,7 +403,6 @@ int append_transaction(txn_rec_t *tx) {
 int read_loan(uint64_t loanId, loan_rec_t *loan) {
     int fd = open(LOANS_DB_FILE, O_RDONLY);
     if(fd < 0) return 0;
-
     lock_file(fd);
     loan_rec_t tmp;
     int found = 0;
@@ -257,11 +418,10 @@ int read_loan(uint64_t loanId, loan_rec_t *loan) {
     return found;
 }
 
-// Write loan
+// Write loan (update existing or append)
 int write_loan(loan_rec_t *loan) {
     int fd = open(LOANS_DB_FILE, O_RDWR | O_CREAT, 0666);
     if(fd < 0) return 0;
-
     lock_file(fd);
     loan_rec_t tmp;
     off_t pos = 0;
@@ -275,27 +435,22 @@ int write_loan(loan_rec_t *loan) {
         }
         pos += sizeof(loan_rec_t);
     }
-    
-    if (!found) { // Should not happen for write_loan, but good practice
+    if (!found) {
         lseek(fd, 0, SEEK_END);
         write(fd, loan, sizeof(loan_rec_t));
     }
-
     unlock_file(fd);
     close(fd);
     return 1;
 }
 
-// Append loan (New function for applying a loan)
+// Append loan
 int append_loan(loan_rec_t *loan) {
     int fd = open(LOANS_DB_FILE, O_WRONLY | O_APPEND | O_CREAT, 0666);
     if(fd < 0) return 0;
-
     lock_file(fd);
-    // Simple ID generation
     loan->loan_id = lseek(fd, 0, SEEK_END) / sizeof(loan_rec_t) + 1;
     write(fd, loan, sizeof(loan_rec_t));
-    
     unlock_file(fd);
     close(fd);
     return 1;
@@ -305,9 +460,7 @@ int append_loan(loan_rec_t *loan) {
 int append_feedback(feedback_rec_t *fb) {
     int fd = open(FEEDBACK_DB_FILE, O_WRONLY | O_APPEND | O_CREAT, 0666);
     if(fd < 0) return 0;
-
     lock_file(fd);
-    // Simple ID generation
     fb->fb_id = lseek(fd, 0, SEEK_END) / sizeof(feedback_rec_t) + 1;
     write(fd, fb, sizeof(feedback_rec_t));
     unlock_file(fd);
@@ -319,7 +472,6 @@ int append_feedback(feedback_rec_t *fb) {
 int write_feedback(feedback_rec_t *fb) {
     int fd = open(FEEDBACK_DB_FILE, O_RDWR | O_CREAT, 0666);
     if(fd < 0) return 0;
-
     lock_file(fd);
     feedback_rec_t tmp;
     off_t pos = 0;
@@ -333,12 +485,10 @@ int write_feedback(feedback_rec_t *fb) {
         }
         pos += sizeof(feedback_rec_t);
     }
-    
     if (!found) {
         lseek(fd, 0, SEEK_END);
         write(fd, fb, sizeof(feedback_rec_t));
     }
-
     unlock_file(fd);
     close(fd);
     return 1;
@@ -348,7 +498,6 @@ int write_feedback(feedback_rec_t *fb) {
 int read_feedback(uint64_t fbId, feedback_rec_t *fb) {
     int fd = open(FEEDBACK_DB_FILE, O_RDONLY);
     if(fd < 0) return 0;
-
     lock_file(fd);
     feedback_rec_t tmp;
     int found = 0;
@@ -367,11 +516,8 @@ int read_feedback(uint64_t fbId, feedback_rec_t *fb) {
 // Simple unique ID generation
 int generate_new_userId() {
     int fd = open(USERS_DB_FILE, O_RDONLY | O_CREAT, 0666);
-    if (fd < 0) return 1001; // Start at 1001 if file doesn't exist
-    
+    if (fd < 0) return 1001; 
     lock_file(fd);
-    // We assume the caller handles the mutex for the USERS_DB_FILE if needed.
-    // Given the write_user logic, we can rely on file size for a simple unique ID.
     int count = lseek(fd, 0, SEEK_END) / sizeof(user_rec_t);
     unlock_file(fd);
     close(fd);

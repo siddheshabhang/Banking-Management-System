@@ -27,26 +27,40 @@ int withdraw_modifier(account_rec_t *acc, void *data) {
     return 1; // Success
 }
 
-// --- Public Functions (Using Atomic Updates) ---
 
-int change_password(uint32_t user_id, const char *newpass, char *resp_msg, size_t resp_sz) {
-    user_rec_t user;
-    if(!read_user(user_id, &user)) {
-        snprintf(resp_msg, resp_sz, "User not found");
-        return 0;
-    }
+// --- Modifier for change_password ---
+typedef struct {
+    const char *newpass;
+    char *resp_msg;
+    size_t resp_sz;
+} change_pass_data;
+
+int change_pass_modifier(user_rec_t *user, void *data) {
+    change_pass_data *d = (change_pass_data*)data;
     
     // Generate new hash and store it
-    generate_password_hash(newpass, user.password_hash, sizeof(user.password_hash));
+    generate_password_hash(d->newpass, user->password_hash, sizeof(user->password_hash));
     
-    if (write_user(&user)) {
-        snprintf(resp_msg, resp_sz, "Password changed successfully");
-        return 1;
-    } else {
-        snprintf(resp_msg, resp_sz, "Password change failed (write error)");
-        return 0;
-    }
+    snprintf(d->resp_msg, d->resp_sz, "Password changed successfully");
+    return 1; // Commit
 }
+
+// --- REFACTORED change_password ---
+// This function now uses the atomic handler to prevent race conditions
+int change_password(uint32_t user_id, const char *newpass, char *resp_msg, size_t resp_sz) {
+    change_pass_data data = {newpass, resp_msg, resp_sz};
+
+    if (atomic_update_user(user_id, change_pass_modifier, &data)) {
+        return 1; // Success, resp_msg was set by modifier
+    }
+    
+    // Failed
+    snprintf(resp_msg, resp_sz, "Password change failed (User not found or concurrency error)");
+    return 0;
+}
+
+
+// --- (Other functions remain the same) ---
 
 int view_balance(uint32_t user_id, char *resp_msg, size_t resp_sz) {
     account_rec_t acc;
@@ -67,6 +81,7 @@ int deposit_money(uint32_t user_id, double amount, char *resp_msg, size_t resp_s
     
     txn_data_t data = {amount};
     
+    // This function automatically inherits the new RECORD locking
     if (atomic_update_account(user_id, deposit_modifier, &data)) {
         // Log transaction
         txn_rec_t tx = {0, 0, user_id, amount, time(NULL), "deposit"};
@@ -94,6 +109,7 @@ int withdraw_money(uint32_t user_id, double amount, char *resp_msg, size_t resp_
 
     txn_data_t data = {amount};
 
+    // This function automatically inherits the new RECORD locking
     if (atomic_update_account(user_id, withdraw_modifier, &data)) {
         // Log transaction
         txn_rec_t tx = {0, user_id, 0, amount, time(NULL), "withdraw"};
@@ -111,12 +127,6 @@ int withdraw_money(uint32_t user_id, double amount, char *resp_msg, size_t resp_
     return 0;
 }
 
-// FIX: This now uses the atomic helpers.
-// NOTE: This is still not a true "ACID" transaction, as the two operations
-// (withdraw from A, deposit to B) are not in a single atomic block.
-// A failure after sender withdrawal but before receiver deposit would lose money.
-// A proper fix requires a global lock or transaction journal, which is
-// outside the scope of this project's file-locking focus.
 int transfer_funds(uint32_t from_id, uint32_t to_id, double amount, char *resp_msg, size_t resp_sz) {
     if (from_id == to_id) {
          snprintf(resp_msg, resp_sz, "Cannot transfer to the same account.");
@@ -132,17 +142,13 @@ int transfer_funds(uint32_t from_id, uint32_t to_id, double amount, char *resp_m
 
     // 1. Check receiver account exists and is active first
     account_rec_t to_acc;
-    if (!read_account(to_id, &to_acc)) {
-        snprintf(resp_msg, resp_sz, "Transfer Failed: Recipient account not found");
+    if (!read_account(to_id, &to_acc) || to_acc.active == STATUS_INACTIVE) {
+        snprintf(resp_msg, resp_sz, "Transfer Failed: Recipient account not found or is inactive");
         return 0;
     }
 
-    if (read_account(to_id, &to_acc) && to_acc.active == STATUS_INACTIVE) {
-        snprintf(resp_msg, resp_sz, "Transfer Failed: Recipient account is inactive");
-        return 0;
-    }
 
-    // 2. Attempt to withdraw from sender
+    // 2. Attempt to withdraw from sender (This is now RECORD locked)
     if (!atomic_update_account(from_id, withdraw_modifier, &withdraw_data)) {
         // Withdrawal failed, check why
         account_rec_t from_acc;
@@ -153,7 +159,7 @@ int transfer_funds(uint32_t from_id, uint32_t to_id, double amount, char *resp_m
         return 0;
     }
 
-    // 3. Attempt to deposit to receiver
+    // 3. Attempt to deposit to receiver (This is now RECORD locked)
     if (!atomic_update_account(to_id, deposit_modifier, &deposit_data)) {
         snprintf(resp_msg, resp_sz, "CRITICAL ERROR: Transfer failed after withdrawal. Contact support.");
         
@@ -180,9 +186,9 @@ int apply_loan(uint32_t user_id, double amount, char *resp_msg, size_t resp_sz) 
         return 0;
     }
     
-    // Initialize loan record
     loan_rec_t loan = {0, user_id, amount, LOAN_PENDING, 0, time(NULL), 0, ""};
     
+    // This is an append-only operation, full-file-lock is fine.
     if(append_loan(&loan)) {
         snprintf(resp_msg, resp_sz, "Loan Application Submitted (ID: %llu)", (unsigned long long)loan.loan_id);
         return 1;
@@ -196,10 +202,10 @@ int view_loan_status(uint32_t user_id, char *resp_msg, size_t resp_sz) {
     int fd = open(LOANS_DB_FILE, O_RDONLY);
     if(fd < 0) { snprintf(resp_msg, resp_sz, "No loan records found"); return 0; }
     
-    lock_file(fd);
+    lock_file(fd); // Full file lock is fine for read-only list
     loan_rec_t loan;
     char tmp[512]; 
-    resp_msg[0] = '\0'; // Start with an empty string
+    resp_msg[0] = '\0'; 
     int found = 0;
     
     const char *status_map[] = {"PENDING", "ASSIGNED", "APPROVED", "REJECTED"};
@@ -228,6 +234,7 @@ int add_feedback(uint32_t user_id, const char *msg, char *resp_msg, size_t resp_
     feedback_rec_t fb = {0, user_id, "", 0, "", time(NULL)};
     strncpy(fb.message, msg, sizeof(fb.message) - 1);
     
+    // Append-only, full-file-lock is fine
     if(append_feedback(&fb)) {
         snprintf(resp_msg, resp_sz, "Feedback Submitted (ID: %llu). Thank you!", (unsigned long long)fb.fb_id);
         return 1;
@@ -241,7 +248,7 @@ int view_feedback_status(uint32_t user_id, char *resp_msg, size_t resp_sz) {
     int fd = open(FEEDBACK_DB_FILE, O_RDONLY);
     if(fd < 0) { snprintf(resp_msg, resp_sz, "No feedback records found"); return 0; }
     
-    lock_file(fd);
+    lock_file(fd); // Full file lock is fine for read-only list
     feedback_rec_t fb;
     char tmp[512]; 
     resp_msg[0] = '\0';
@@ -272,7 +279,7 @@ int view_transaction_history(uint32_t user_id, char *resp_msg, size_t resp_sz) {
     int fd = open(TRANSACTIONS_DB_FILE, O_RDONLY);
     if(fd < 0) { snprintf(resp_msg, resp_sz, "No transaction history found"); return 0; }
     
-    lock_file(fd);
+    lock_file(fd); // Full file lock is fine for read-only list
     txn_rec_t tx;
     char tmp[256]; 
     resp_msg[0] = '\0';
@@ -294,27 +301,22 @@ int view_transaction_history(uint32_t user_id, char *resp_msg, size_t resp_sz) {
         uint32_t other_id = 0;
         int tx_is_relevant = 0; // Flag to mark if this TXN should be shown
 
-        // --- NEW LOGIC ---
-        // Check the narration and match the user_id to the correct role
-        
         if (strcmp(tx.narration, "deposit") == 0 && tx.to_account == user_id) {
             strcpy(type_str, "DEPOSIT");
-            other_id = 0; // Or tx.from_account
+            other_id = 0;
             tx_is_relevant = 1;
         
         } else if (strcmp(tx.narration, "withdraw") == 0 && tx.from_account == user_id) {
             strcpy(type_str, "WITHDRAW");
-            other_id = 0; // Or tx.to_account
+            other_id = 0;
             tx_is_relevant = 1;
         
         } else if (strcmp(tx.narration, "transfer_out") == 0 && tx.from_account == user_id) {
-            // User is the SENDER, show "TRANSFER_OUT"
             strcpy(type_str, "TRANSFER_OUT");
             other_id = tx.to_account;
             tx_is_relevant = 1;
 
         } else if (strcmp(tx.narration, "transfer_in") == 0 && tx.to_account == user_id) {
-            // User is the RECEIVER, show "TRANSFER_IN"
             strcpy(type_str, "TRANSFER_IN");
             other_id = tx.from_account;
             tx_is_relevant = 1;
@@ -332,7 +334,7 @@ int view_transaction_history(uint32_t user_id, char *resp_msg, size_t resp_sz) {
             strncat(resp_msg, tmp, resp_sz - strlen(resp_msg) - 1);
         }
         
-        offset = lseek(fd, -2 * sizeof(txn_rec_t), SEEK_CUR); // Move back two records (one read + one more)
+        offset = lseek(fd, -2 * sizeof(txn_rec_t), SEEK_CUR); // Move back two records
     }
     
     unlock_file(fd);
