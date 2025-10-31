@@ -1,14 +1,4 @@
-/*
- * Save as: src/db_inspector.c
- *
- * A simple read-only utility to dump all records from the .db files.
- *
- * HOW TO COMPILE (from your project's root directory):
- * gcc -o inspector src/db_inspector.c -Iinclude
- *
- * HOW TO RUN (from your project's root directory):
- * ./inspector
- */
+
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -74,9 +64,11 @@ void print_users() {
         printf("  Username:     %s\n", user.username);
         printf("  Password Hash:%s\n", user.password_hash);
         printf("  Role:         %s (%d)\n", get_role_str(user.role), user.role);
-        printf("  Name:         %s\n", user.name);
+        printf("  Name:         %s %s\n", user.first_name, user.last_name);
         printf("  Age:          %u\n", user.age);
         printf("  Address:      %s\n", user.address);
+        printf("  Email:        %s\n", user.email);
+        printf("  Phone:        %s\n", user.phone);
         printf("  User Status:  %s\n", user.active == STATUS_ACTIVE ? "ACTIVE" : "INACTIVE");
         print_timestamp(user.created_at, "  Created At");
     }
@@ -102,7 +94,6 @@ void print_accounts() {
         printf("  User ID:      %u\n", acc.user_id);
         printf("  Balance:      %.2f\n", acc.balance);
         printf("  Acct Status:  %s\n", acc.active == STATUS_ACTIVE ? "ACTIVE" : "INACTIVE");
-        print_timestamp(acc.created_at, "  Created At");
     }
     close(fd);
 }

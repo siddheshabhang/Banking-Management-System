@@ -5,6 +5,8 @@
 #include <arpa/inet.h>
 #include "client.h"
 #include "server.h" // For request_t, response_t, and constants
+#include <ctype.h>  // For isdigit
+#include <stdbool.h> // For bool
 
 // Helper to send request and get response
 // CRITICAL FIX: This now sends/receives the correct structs
@@ -30,10 +32,132 @@ void clear_stdin() {
     while ((c = getchar()) != '\n' && c != EOF);
 }
 
-// Helper to read a line safely
-void read_line(char *buffer, int size) {
-    fgets(buffer, size, stdin);
-    buffer[strcspn(buffer, "\n")] = 0; // Remove trailing newline
+/* --- VALIDATION HELPERS --- */
+// Generic function to read a validated string
+// Loops until input is valid
+void read_validated_string(const char* prompt, char* buffer, int size, 
+                           bool (*validator)(const char*, char*, size_t)) {
+    char error_msg[128] = {0};
+    while (true) {
+        printf("%s: ", prompt);
+        fgets(buffer, size, stdin);
+        buffer[strcspn(buffer, "\n")] = 0; // Remove trailing newline
+
+        if (validator(buffer, error_msg, sizeof(error_msg))) {
+            break; // Success
+        } else {
+            printf("Error: %s. Please try again.\n", error_msg);
+        }
+    }
+}
+
+// Validator for non-empty strings
+bool validate_not_empty(const char* input, char* error_msg, size_t err_sz) {
+    if (input[0] == '\0') {
+        snprintf(error_msg, err_sz, "Input cannot be empty");
+        return false;
+    }
+    return true;
+}
+
+// Validator for name parts (non-empty, no spaces, < MAX_FNAME_LEN)
+bool validate_name_part(const char* input, char* error_msg, size_t err_sz) {
+    if (!validate_not_empty(input, error_msg, err_sz)) return false;
+    if (strlen(input) >= MAX_FNAME_LEN) { // Use MAX_FNAME_LEN (64)
+        snprintf(error_msg, err_sz, "Input too long (max %d)", MAX_FNAME_LEN - 1);
+        return false;
+    }
+    if (strchr(input, ' ') != NULL) {
+        snprintf(error_msg, err_sz, "Input cannot contain spaces");
+        return false;
+    }
+    return true;
+}
+
+// Validator for address (non-empty, no spaces, < MAX_ADDR_LEN)
+bool validate_address(const char* input, char* error_msg, size_t err_sz) {
+    if (!validate_not_empty(input, error_msg, err_sz)) return false;
+    if (strlen(input) >= MAX_ADDR_LEN) {
+        snprintf(error_msg, err_sz, "Input too long (max %d)", MAX_ADDR_LEN - 1);
+        return false;
+    }
+    if (strchr(input, ' ') != NULL) {
+        snprintf(error_msg, err_sz, "Input cannot contain spaces (use '_' if needed)");
+        return false;
+    }
+    return true;
+}
+
+// Validator for email (non-empty, < MAX_EMAIL_LEN, must have @ and .) [cite: 1]
+bool validate_email(const char* input, char* error_msg, size_t err_sz) {
+    if (!validate_not_empty(input, error_msg, err_sz)) return false;
+    if (strlen(input) >= MAX_EMAIL_LEN) {
+        snprintf(error_msg, err_sz, "Email too long (max %d)", MAX_EMAIL_LEN - 1);
+        return false;
+    }
+    if (strchr(input, '@') == NULL || strchr(input, '.') == NULL) {
+        snprintf(error_msg, err_sz, "Invalid email format (must contain '@' and '.')");
+        return false;
+    }
+    return true;
+}
+
+// Validator for phone (non-empty, < MAX_PHONE_LEN, 10 digits) [cite: 1]
+bool validate_phone(const char* input, char* error_msg, size_t err_sz) {
+    if (!validate_not_empty(input, error_msg, err_sz)) return false;
+    if (strlen(input) != 10) {
+        snprintf(error_msg, err_sz, "Phone must be exactly 10 digits");
+        return false;
+    }
+    for (int i = 0; i < 10; i++) {
+        if (!isdigit(input[i])) {
+            snprintf(error_msg, err_sz, "Phone must contain only digits");
+            return false;
+        }
+    }
+    return true;
+}
+
+// Validator for username/password (non-empty, no spaces)
+bool validate_credential(const char* input, char* error_msg, size_t err_sz) {
+    if (!validate_not_empty(input, error_msg, err_sz)) return false;
+    if (strlen(input) >= MAX_USERNAME_LEN) { // Use larger of user/pass
+        snprintf(error_msg, err_sz, "Input too long");
+        return false;
+    }
+    if (strchr(input, ' ') != NULL) {
+        snprintf(error_msg, err_sz, "Input cannot contain spaces");
+        return false;
+    }
+    return true;
+}
+
+// Helper to read a valid double (for deposit/withdraw) [cite: 1]
+double read_valid_double(const char* prompt) {
+    char buffer[128];
+    char error_msg[128];
+    while (true) {
+        printf("%s: ", prompt);
+        fgets(buffer, sizeof(buffer), stdin);
+        buffer[strcspn(buffer, "\n")] = 0; // Remove newline
+        
+        if (buffer[0] == '\0') {
+            printf("Error: Input cannot be empty. Please try again.\n");
+            continue;
+        }
+
+        char* endptr;
+        double value = strtod(buffer, &endptr);
+
+        // Check if conversion failed or if there are trailing non-numeric chars
+        if (endptr == buffer || *endptr != '\0') {
+            printf("Error: Invalid number. Please enter digits only (e.g., 100.50).\n");
+        } else if (value <= 0) {
+            printf("Error: Amount must be positive. Please try again.\n");
+        } else {
+            return value; // Success
+        }
+    }
 }
 
 // Customer Menu
@@ -46,7 +170,10 @@ void customer_menu(int userId, int sockfd, const char* userName) {
         printf("\n--- Customer Menu (Acct No: AC%d) ---\n", userId);
         printf("1. View Balance\n2. Deposit Money\n3. Withdraw Money\n4. Transfer Funds\n");
         printf("5. Apply Loan\n6. View Loan Status\n7. Add Feedback\n8. View Feedback Status\n");
-        printf("9. View Transaction History\n10. Change Password\n11. Logout\n");
+        printf("9. View Transaction History\n");
+        printf("10. View Personal Details\n");
+        printf("11. Change Password\n");
+        printf("12. Logout (Back to main menu)\n");
         printf("Enter choice: ");
         
         if (scanf("%d", &choice) != 1) {
@@ -66,20 +193,14 @@ void customer_menu(int userId, int sockfd, const char* userName) {
                 break;
             case 2:
                 {
-                    double amount;
-                    printf("Enter deposit amount: ");
-                    scanf("%lf", &amount);
-                    clear_stdin();
+                    double amount = read_valid_double("Enter deposit amount");
                     strcpy(req.op, "DEPOSIT");
                     snprintf(req.payload, sizeof(req.payload), "%u %lf", userId, amount);
                 }
                 break;
             case 3:
                 {
-                    double amount;
-                    printf("Enter withdrawal amount: ");
-                    scanf("%lf", &amount);
-                    clear_stdin();
+                    double amount = read_valid_double("Enter withdrawal amount");
                     strcpy(req.op, "WITHDRAW");
                     snprintf(req.payload, sizeof(req.payload), "%u %lf", userId, amount);
                 }
@@ -90,25 +211,20 @@ void customer_menu(int userId, int sockfd, const char* userName) {
                     double amount;
                     char acct_str[32];
                     printf("Enter recipient Account No (e.g., AC1005): ");
-                    read_line(acct_str, sizeof(acct_str));
+                    read_validated_string("", acct_str, sizeof(acct_str), validate_not_empty);
                     if (acct_str[0] == 'A' || acct_str[0] == 'a') {
                         toId = atoi(acct_str + 2); 
                     } else {
                         toId = atoi(acct_str);
                     }
-                    printf("Enter amount: ");
-                    scanf("%lf", &amount);
-                    clear_stdin();
+                    amount = read_valid_double("Enter amount");
                     strcpy(req.op, "TRANSFER");
                     snprintf(req.payload, sizeof(req.payload), "%u %u %lf", userId, toId, amount);
                 }
                 break;
             case 5:
                 {
-                    double loanAmount;
-                    printf("Enter loan amount: ");
-                    scanf("%lf", &loanAmount);
-                    clear_stdin();
+                    double loanAmount = read_valid_double("Enter loan amount");
                     strcpy(req.op, "APPLY_LOAN");
                     snprintf(req.payload, sizeof(req.payload), "%u %lf", userId, loanAmount);
                 }
@@ -120,8 +236,7 @@ void customer_menu(int userId, int sockfd, const char* userName) {
             case 7:
                 {
                     char feedback[512];
-                    printf("Enter feedback (max 512 chars): ");
-                    read_line(feedback, sizeof(feedback));
+                    read_validated_string("Enter feedback (max 512 chars)", feedback, sizeof(feedback), validate_not_empty);
                     strcpy(req.op, "ADD_FEEDBACK");
                     snprintf(req.payload, sizeof(req.payload), "%u %s", userId, feedback);
                 }
@@ -135,15 +250,18 @@ void customer_menu(int userId, int sockfd, const char* userName) {
                 snprintf(req.payload, sizeof(req.payload), "%u", userId);
                 break;
             case 10:
+                strcpy(req.op, "VIEW_DETAILS");
+                snprintf(req.payload, sizeof(req.payload), "%u", userId);
+                break;
+            case 11:
                 {
                     char newpass[MAX_PASSWORD_LEN];
-                    printf("Enter new password: ");
-                    read_line(newpass, sizeof(newpass));
+                    read_validated_string("Enter new password (no spaces)", newpass, sizeof(newpass), validate_credential);
                     strcpy(req.op, "CHANGE_PASSWORD");
                     snprintf(req.payload, sizeof(req.payload), "%u %s", userId, newpass);
                 }
                 break;
-            case 11:
+            case 12:
                 strcpy(req.op, "LOGOUT");
                 break;
             default:
@@ -155,7 +273,7 @@ void customer_menu(int userId, int sockfd, const char* userName) {
         printf("\n--- Server Response ---\n%s\n-----------------------\n", resp.message);
 
         if (resp.status_code == -1) return; // Server connection lost
-        if (choice == 11) return; // Logout
+        if (choice == 12) return; // Logout
     }
 }
 
@@ -169,7 +287,8 @@ void employee_menu(int userId, int sockfd, const char* userName) {
         printf("\n--- Employee Menu (User: %s, ID: %d) ---\n", userName, userId);
         printf("1. Add New Customer\n2. Modify Customer Details\n3. View Pending Loans\n");
         printf("4. Approve/Reject Loans\n5. View Assigned Loans\n6. View Customer Transactions\n");
-        printf("7. Change Password\n8. Logout\n");
+        printf("7. Change Password\n");
+        printf("8. Logout (Back to main menu)\n");
         printf("Enter choice: ");
         
         if (scanf("%d", &choice) != 1) {
@@ -185,48 +304,47 @@ void employee_menu(int userId, int sockfd, const char* userName) {
         switch(choice) {
             case 1:
                 {
-                    char name[MAX_NAME_LEN], address[MAX_ADDR_LEN], username[MAX_USERNAME_LEN], password[MAX_PASSWORD_LEN];
+                    char fname[MAX_FNAME_LEN], lname[MAX_LNAME_LEN], address[MAX_ADDR_LEN], email[MAX_EMAIL_LEN], phone[MAX_PHONE_LEN];
+                    char username[MAX_USERNAME_LEN], password[MAX_PASSWORD_LEN];
                     int age;
-                    printf("Enter name (no spaces): ");
-                    read_line(name, sizeof(name));
+                    read_validated_string("Enter first name (no spaces)", fname, sizeof(fname), validate_name_part);
+                    read_validated_string("Enter last name (no spaces)", lname, sizeof(lname), validate_name_part);
                     printf("Enter age: ");
                     scanf("%d", &age);
                     clear_stdin();
-                    printf("Enter address (no spaces): ");
-                    read_line(address, sizeof(address));
-                    printf("Enter desired username: ");
-                    read_line(username, sizeof(username));
-                    printf("Enter desired password: ");
-                    read_line(password, sizeof(password));
+                    read_validated_string("Enter address (no spaces, use '_')", address, sizeof(address), validate_address);
+                    read_validated_string("Enter email", email, sizeof(email), validate_email);
+                    read_validated_string("Enter phone (10 digits)", phone, sizeof(phone), validate_phone);
+                    read_validated_string("Enter desired username (no spaces)", username, sizeof(username), validate_credential);
+                    read_validated_string("Enter desired password (no spaces)", password, sizeof(password), validate_credential);
 
                     strcpy(req.op, "ADD_CUSTOMER");
-                    snprintf(req.payload, sizeof(req.payload), "%s %d %s %s %s", name, age, address, username, password);
+                    snprintf(req.payload, sizeof(req.payload), "%s %s %d %s %s %s %s %s", fname, lname, age, address, email, phone, username, password);
                 }
                 break;
             case 2:
                 {
                     int custId;
-                    char name[MAX_NAME_LEN], address[MAX_ADDR_LEN];
-                    char acct_str[32];
+                    char fname[MAX_FNAME_LEN], lname[MAX_LNAME_LEN], address[MAX_ADDR_LEN], email[MAX_EMAIL_LEN], phone[MAX_PHONE_LEN];
+                    char acct_str[32];        
                     int age;
-                    printf("Enter customer Account No (e.g., AC1004): ");
-                    read_line(acct_str, sizeof(acct_str));
+                    read_validated_string("Enter customer Account No (e.g., AC1004)", acct_str, sizeof(acct_str), validate_not_empty);
                     if (acct_str[0] == 'A' || acct_str[0] == 'a') {
                         custId = atoi(acct_str + 2);
                     } else {
                         custId = atoi(acct_str);
                     }
-                    clear_stdin();
-                    printf("Enter new name (no spaces): ");
-                    read_line(name, sizeof(name));
+                    read_validated_string("Enter new first name (no spaces)", fname, sizeof(fname), validate_name_part);
+                    read_validated_string("Enter new last name (no spaces)", lname, sizeof(lname), validate_name_part);
                     printf("Enter new age: ");
                     scanf("%d", &age);
                     clear_stdin();
-                    printf("Enter new address (no spaces): ");
-                    read_line(address, sizeof(address));
+                    read_validated_string("Enter new address (no spaces, use '_')", address, sizeof(address), validate_address);
+                    read_validated_string("Enter new email", email, sizeof(email), validate_email);
+                    read_validated_string("Enter new phone (10 digits)", phone, sizeof(phone), validate_phone);
                     
                     strcpy(req.op, "MODIFY_CUSTOMER");
-                    snprintf(req.payload, sizeof(req.payload), "%u %d %s %s", custId, age, name, address);
+                    snprintf(req.payload, sizeof(req.payload), "%u %d %s %s %s %s %s", custId, age, fname, lname, address, email, phone);
                 }
                 break;
             case 3:
@@ -259,8 +377,7 @@ void employee_menu(int userId, int sockfd, const char* userName) {
                 {
                     int custId;
                     char acct_str[32];
-                    printf("Enter customer Account No (e.g., AC1004): ");
-                    read_line(acct_str, sizeof(acct_str));
+                    read_validated_string("Enter customer Account No (e.g., AC1004)", acct_str, sizeof(acct_str), validate_not_empty);
                     if (acct_str[0] == 'A' || acct_str[0] == 'a') {
                         custId = atoi(acct_str + 2);
                     } else {
@@ -274,8 +391,7 @@ void employee_menu(int userId, int sockfd, const char* userName) {
             case 7:
                 {
                     char newpass[MAX_PASSWORD_LEN];
-                    printf("Enter new password: ");
-                    read_line(newpass, sizeof(newpass));
+                    read_validated_string("Enter new password (no spaces)", newpass, sizeof(newpass), validate_credential);
                     strcpy(req.op, "CHANGE_PASSWORD");
                     snprintf(req.payload, sizeof(req.payload), "%u %s", userId, newpass);
                 }
@@ -306,7 +422,8 @@ void manager_menu(int userId, int sockfd, const char* userName) {
         printf("\n--- Manager Menu (User: %s, ID: %d) ---\n", userName, userId);
         printf("1. Activate/Deactivate Customer Account\n2. View Non-Assigned Loans\n");
         printf("3. Assign Loan to Employee\n4. Review Customer Feedback\n");
-        printf("5. Change Password\n6. Logout\n");
+        printf("5. Change Password\n");
+        printf("6. Logout (Back to main menu)\n");
         printf("Enter choice: ");
         
         if (scanf("%d", &choice) != 1) {
@@ -324,8 +441,7 @@ void manager_menu(int userId, int sockfd, const char* userName) {
                 {
                     int custId, status;
                     char acct_str[32];
-                    printf("Enter customer Account No (e.g., AC1004): ");
-                    read_line(acct_str, sizeof(acct_str));
+                    read_validated_string("Enter customer Account No (e.g., AC1004)", acct_str, sizeof(acct_str), validate_not_empty);
                     if (acct_str[0] == 'A' || acct_str[0] == 'a') {
                         custId = atoi(acct_str + 2);
                     } else {
@@ -359,8 +475,7 @@ void manager_menu(int userId, int sockfd, const char* userName) {
             case 5:
                 {
                     char newpass[MAX_PASSWORD_LEN];
-                    printf("Enter new password: ");
-                    read_line(newpass, sizeof(newpass));
+                    read_validated_string("Enter new password (no spaces)", newpass, sizeof(newpass), validate_credential);
                     strcpy(req.op, "CHANGE_PASSWORD");
                     snprintf(req.payload, sizeof(req.payload), "%u %s", userId, newpass);
                 }
@@ -390,7 +505,9 @@ void admin_menu(int userId, int sockfd, const char* userName) {
     while(1) {
         printf("\n--- Admin Menu (User: %s, ID: %d) ---\n", userName, userId);
         printf("1. Add New Bank Employee\n2. Modify User Details\n");
-        printf("3. Manage User Roles\n4. Change Password\n5. Logout\n");
+        printf("3. Manage User Roles\n");
+        printf("4. Change Password\n");
+        printf("5. Logout (Back to main menu)\n");
         printf("Enter choice: ");
         
         if (scanf("%d", &choice) != 1) {
@@ -406,44 +523,50 @@ void admin_menu(int userId, int sockfd, const char* userName) {
         switch(choice) {
             case 1:
                 {
-                    char name[MAX_NAME_LEN], role[MAX_ROLE_STR], address[MAX_ADDR_LEN], username[MAX_USERNAME_LEN], password[MAX_PASSWORD_LEN];
+                    char fname[MAX_FNAME_LEN], lname[MAX_LNAME_LEN], role[MAX_ROLE_STR], address[MAX_ADDR_LEN], email[MAX_EMAIL_LEN], phone[MAX_PHONE_LEN];
+                    char username[MAX_USERNAME_LEN], password[MAX_PASSWORD_LEN];
                     int age;
-                    printf("Enter name (no spaces): ");
-                    read_line(name, sizeof(name));
+                    read_validated_string("Enter first name (no spaces)", fname, sizeof(fname), validate_name_part);
+                    read_validated_string("Enter last name (no spaces)", lname, sizeof(lname), validate_name_part);
                     printf("Enter age: ");
                     scanf("%d", &age);
                     clear_stdin();
-                    printf("Enter address (no spaces): ");
-                    read_line(address, sizeof(address));
-                    printf("Enter role (employee/manager/admin): ");
-                    read_line(role, sizeof(role));
-                    printf("Enter desired username: ");
-                    read_line(username, sizeof(username));
-                    printf("Enter desired password: ");
-                    read_line(password, sizeof(password));
+                    read_validated_string("Enter address (no spaces, use '_')", address, sizeof(address), validate_address);
+                    read_validated_string("Enter role (employee/manager/admin)", role, sizeof(role), validate_credential);
+                    if(strcmp(role, "customer"))
+                    {
+                        printf("Error: Invalid role for employee. Must be 'employee', 'manager', or 'admin'.\n");
+                        continue;
+                    }
+                    read_validated_string("Enter email", email, sizeof(email), validate_email);
+                    read_validated_string("Enter phone (10 digits)", phone, sizeof(phone), validate_phone);
+                    read_validated_string("Enter desired username (no spaces)", username, sizeof(username), validate_credential);
+                    read_validated_string("Enter desired password (no spaces)", password, sizeof(password), validate_credential);
 
                     strcpy(req.op, "ADD_EMPLOYEE");
-                    snprintf(req.payload, sizeof(req.payload), "%s %d %s %s %s %s", name, age, address, role, username, password);
+                    snprintf(req.payload, sizeof(req.payload), "%s %s %d %s %s %s %s %s %s", fname, lname, age, address, role, email, phone, username, password);
                 }
                 break;
             case 2:
                 {
                     int targetId;
-                    char name[MAX_NAME_LEN], address[MAX_ADDR_LEN];
+                    char fname[MAX_FNAME_LEN], lname[MAX_LNAME_LEN], address[MAX_ADDR_LEN], email[MAX_EMAIL_LEN], phone[MAX_PHONE_LEN];
                     int age;
                     printf("Enter user ID to modify: ");
                     scanf("%d", &targetId);
+                    scanf("%d", &targetId);
                     clear_stdin();
-                    printf("Enter new name (no spaces): ");
-                    read_line(name, sizeof(name));
+                    read_validated_string("Enter new first name (no spaces)", fname, sizeof(fname), validate_name_part);
+                    read_validated_string("Enter new last name (no spaces)", lname, sizeof(lname), validate_name_part);
                     printf("Enter new age: ");
                     scanf("%d", &age);
                     clear_stdin();
-                    printf("Enter new address (no spaces): ");
-                    read_line(address, sizeof(address));
+                    read_validated_string("Enter new address (no spaces, use '_')", address, sizeof(address), validate_address);
+                    read_validated_string("Enter new email", email, sizeof(email), validate_email);
+                    read_validated_string("Enter new phone (10 digits)", phone, sizeof(phone), validate_phone);
                     
                     strcpy(req.op, "MODIFY_USER");
-                    snprintf(req.payload, sizeof(req.payload), "%u %d %s %s", targetId, age, name, address);
+                    snprintf(req.payload, sizeof(req.payload), "%u %d %s %s %s %s %s", targetId, age, fname, lname, address, email, phone);
                 }
                 break;
             case 3:
@@ -466,8 +589,7 @@ void admin_menu(int userId, int sockfd, const char* userName) {
                     printf("Enter user ID to change role: ");
                     scanf("%d", &targetId);
                     clear_stdin();
-                    printf("Enter new role (customer/employee/manager/admin): ");
-                    read_line(role, sizeof(role));
+                    read_validated_string("Enter new role (customer/employee/manager/admin)", role, sizeof(role), validate_credential);
                     
                     // Reset req struct for the *next* operation
                     memset(&req, 0, sizeof(req)); 
@@ -478,8 +600,7 @@ void admin_menu(int userId, int sockfd, const char* userName) {
             case 4:
                 {
                     char newpass[MAX_PASSWORD_LEN];
-                    printf("Enter new password: ");
-                    read_line(newpass, sizeof(newpass));
+                    read_validated_string("Enter new password (no spaces)", newpass, sizeof(newpass), validate_credential);
                     strcpy(req.op, "CHANGE_PASSWORD");
                     snprintf(req.payload, sizeof(req.payload), "%u %s", userId, newpass);
                 }
@@ -529,91 +650,91 @@ int main(int argc, char *argv[]) {
     printf("\n\t***** WELCOME TO THE BANK! *****\n");
     printf("Connected to server at %s\n", argv[1]);
 
-    int userId = 0; // Initialize userId outside the loop
-    char role[MAX_ROLE_STR] = {0};
-    char name[MAX_NAME_LEN] = {0};
-    request_t req;
-    response_t resp;
+    while(1) {
+        int userId = 0; // Initialize userId outside the loop
+        char role[MAX_ROLE_STR] = {0};
+        char name[MAX_FNAME_LEN] = {0}; // Will hold first name
+        request_t req;
+        response_t resp;
 
-    // --- Role Selection and Login Loop ---
-    while (userId == 0) {
-        printf("\n==================================\n");
-        printf("Please select your role to login:\n");
-        printf("1. Customer\n");
-        printf("2. Employee\n");
-        printf("3. Manager\n");
-        printf("4. Administrator\n");
-        printf("5. Exit Client\n");
-        printf("Enter choice (1-5): ");
+        // --- Role Selection and Login Loop ---
+        while (userId == 0) {
+            printf("\n==================================\n");
+            printf("Please select your role to login:\n");
+            printf("1. Customer\n");
+            printf("2. Employee\n");
+            printf("3. Manager\n");
+            printf("4. Administrator\n");
+            printf("5. Exit Client\n");
+            printf("Enter choice (1-5): ");
 
-        int choice;
-        if (scanf("%d", &choice) != 1) {
-            clear_stdin();
-            printf("Invalid input. Please enter a number.\n");
-            continue;
-        }
-        clear_stdin();
-
-        if (choice == 5) {
-            printf("Exiting client...\n");
-            close(sockfd);
-            return 0;
-        }
-        
-        // --- Standard Login Prompt ---
-        char username[MAX_USERNAME_LEN], password[MAX_PASSWORD_LEN];
-        printf("Username: ");
-        read_line(username, sizeof(username));
-        printf("Password: ");
-        read_line(password, sizeof(password));
-
-        // Prepare LOGIN Request
-        memset(&req, 0, sizeof(req));
-        strcpy(req.op, "LOGIN");
-        snprintf(req.payload, sizeof(req.payload), "%s %s", username, password);
-        
-        send_request_and_get_response(sockfd, &req, &resp);
-
-        // Check Server Response and Validate Role
-        if (sscanf(resp.message, "SUCCESS %d %[^|]|%[^\n]", &userId, role, name) == 3) {
-            
-            // Check if the role matches the selected choice (optional but good practice)
-            int valid_role = 0;
-            if (choice == 1 && strcmp(role, "customer") == 0) valid_role = 1;
-            if (choice == 2 && strcmp(role, "employee") == 0) valid_role = 1;
-            if (choice == 3 && strcmp(role, "manager") == 0) valid_role = 1;
-            if (choice == 4 && strcmp(role, "admin") == 0) valid_role = 1;
-
-            if (valid_role) {
-                printf("\n==================================\n");
-                printf("Login successful! Welcome, %s!\n", name); // <-- WELCOME MESSAGE
-                
-                if(choice == 1) { // If they are a customer
-                    printf("Account Number: AC%d\n", userId); // <-- ACCOUNT NUMBER
-                }
-                printf("==================================\n");
-                break;
-            } else {
-                printf("Login failed: Credentials are valid, but the role '%s' does not match selection.\n", role);
-                userId = 0; // Reset to force re-login
+            int choice;
+            if (scanf("%d", &choice) != 1) {
+                clear_stdin();
+                printf("Invalid input. Please enter a number.\n");
+                continue;
             }
+            clear_stdin();
 
-        } else {
-            printf("Login failed: %s\n", resp.message);
-            userId = 0; // Keep looping
+            if (choice == 5) {
+                printf("Exiting client...\n");
+                close(sockfd);
+                return 0;
+            }
+            
+            // --- Standard Login Prompt ---
+            char username[MAX_USERNAME_LEN], password[MAX_PASSWORD_LEN];
+            read_validated_string("Username", username, sizeof(username), validate_credential);
+            read_validated_string("Password", password, sizeof(password), validate_credential);
+
+            // Prepare LOGIN Request
+            memset(&req, 0, sizeof(req));
+            strcpy(req.op, "LOGIN");
+            snprintf(req.payload, sizeof(req.payload), "%s %s", username, password);
+            
+            send_request_and_get_response(sockfd, &req, &resp);
+
+            // Check Server Response and Validate Role
+            if (sscanf(resp.message, "SUCCESS %d %[^|]|%[^\n]", &userId, role, name) == 3) {
+                
+                // Check if the role matches the selected choice (optional but good practice)
+                int valid_role = 0;
+                if (choice == 1 && strcmp(role, "customer") == 0) valid_role = 1;
+                if (choice == 2 && strcmp(role, "employee") == 0) valid_role = 1;
+                if (choice == 3 && strcmp(role, "manager") == 0) valid_role = 1;
+                if (choice == 4 && strcmp(role, "admin") == 0) valid_role = 1;
+
+                if (valid_role) {
+                    printf("\n==================================\n");
+                    printf("Login successful! Welcome, %s!\n", name); // <-- WELCOME MESSAGE
+                    
+                    if(choice == 1) { // If they are a customer
+                        printf("Account Number: AC%d\n", userId); // <-- ACCOUNT NUMBER
+                    }
+                    printf("==================================\n");
+                    break;
+                } else {
+                    printf("Login failed: Credentials are valid, but the role '%s' does not match selection.\n", role);
+                    userId = 0; // Reset to force re-login
+                }
+
+            } else {
+                printf("Login failed: %s\n", resp.message);
+                userId = 0; // Keep looping
+            }
+        } // End of while (userId == 0) loop
+
+        // --- Role-Specific Menu Dispatch (Starts here) ---
+        if (userId != 0) {
+            if(strcmp(role, "customer") == 0) customer_menu(userId, sockfd, name);
+            else if(strcmp(role, "employee") == 0) employee_menu(userId, sockfd, name);
+            else if(strcmp(role, "manager") == 0) manager_menu(userId, sockfd, name);
+            else if(strcmp(role, "admin") == 0) admin_menu(userId, sockfd, name);
+            else printf("Unknown role received from server.\n");
         }
-    } // End of while (userId == 0) loop
 
-    // --- Role-Specific Menu Dispatch (Starts here) ---
-    if (userId != 0) {
-        if(strcmp(role, "customer") == 0) customer_menu(userId, sockfd, name);
-        else if(strcmp(role, "employee") == 0) employee_menu(userId, sockfd, name);
-        else if(strcmp(role, "manager") == 0) manager_menu(userId, sockfd, name);
-        else if(strcmp(role, "admin") == 0) admin_menu(userId, sockfd, name);
-        else printf("Unknown role received from server.\n");
-    }
-
-    printf("Logging out and disconnecting.\n");
+        printf("Logging out... returning to main menu.\n");
+    } 
     close(sockfd);
     return 0;
 }

@@ -61,6 +61,26 @@ int change_password(uint32_t user_id, const char *newpass, char *resp_msg, size_
 
 
 // --- (Other functions remain the same) ---
+int view_personal_details(uint32_t user_id, char *resp_msg, size_t resp_sz) {
+    user_rec_t user;
+    if (!read_user(user_id, &user)) {
+        snprintf(resp_msg, resp_sz, "Could not find user details.");
+        return 0;
+    }
+    
+    snprintf(resp_msg, resp_sz,
+             "--- Personal Details for %s ---\n"
+             "Account ID: AC%u\n"
+             "Name:       %s %s\n"
+             "Age:        %u\n"
+             "Address:    %s\n"
+             "Email:      %s\n"
+             "Phone:      %s\n",
+             user.first_name, user.user_id, user.first_name, user.last_name, user.age,
+             user.address, user.email, user.phone);
+             
+    return 1;
+}
 
 int view_balance(uint32_t user_id, char *resp_msg, size_t resp_sz) {
     account_rec_t acc;

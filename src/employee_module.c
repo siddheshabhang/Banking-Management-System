@@ -97,9 +97,12 @@ int approve_reject_loan(uint64_t loan_id, const char *action, uint32_t emp_id, c
 
 // --- Modifier for modify_customer ---
 typedef struct {
-    const char *name;
+    const char *first_name;
+    const char *last_name;
     int age;
     const char *address;
+    const char *email;
+    const char *phone;
     char *resp_msg;
     size_t resp_sz;
 } modify_cust_data;
@@ -112,20 +115,23 @@ int modify_customer_modifier(user_rec_t *user, void *data) {
          return 0; // Abort
     }
 
-    strncpy(user->name, d->name, sizeof(user->name) - 1);
+    if (!check_uniqueness(user->username, d->email, d->phone, user->user_id, d->resp_msg, d->resp_sz)) {
+        return 0; // Abort, resp_msg already set by check_uniqueness
+    }
+    
+    strncpy(user->first_name, d->first_name, sizeof(user->first_name) - 1);
+    strncpy(user->last_name, d->last_name, sizeof(user->last_name) - 1);
     user->age = d->age;
     strncpy(user->address, d->address, sizeof(user->address) - 1);
-
-    snprintf(d->resp_msg, d->resp_sz, 
-             "Customer Modified (ID: %u).\nNew Details:\nName: %s\nAge: %d\nAddress: %s", 
-             user->user_id, user->name, user->age, user->address);
+    strncpy(user->email, d->email, sizeof(user->email) - 1);
+    strncpy(user->phone, d->phone, sizeof(user->phone) - 1);
+    snprintf(d->resp_msg, d->resp_sz, "Customer Modified (ID: %u).\nNew Details:\nName: %s %s\nAge: %d\nAddress: %s\nEmail: %s\nPhone: %s", user->user_id, user->first_name, user->last_name, user->age, user->address, user->email, user->phone);
     return 1; // Commit
 }
 
 // --- REFACTORED modify_customer ---
-int modify_customer(uint32_t user_id, const char *name, int age, const char *address, char *resp_msg, size_t resp_sz) {
-    modify_cust_data data = {name, age, address, resp_msg, resp_sz};
-    
+int modify_customer(uint32_t user_id, const char *first_name, const char *last_name, int age, const char *address, const char *email, const char *phone, char *resp_msg, size_t resp_sz) {
+    modify_cust_data data = {first_name, last_name, age, address, email, phone, resp_msg, resp_sz};
     if (atomic_update_user(user_id, modify_customer_modifier, &data)) {
         return 1;
     }
@@ -141,7 +147,9 @@ int modify_customer(uint32_t user_id, const char *name, int age, const char *add
 
 // This function is safe, as it appends new records using full-file-lock functions
 int add_new_customer(user_rec_t *user, account_rec_t *acc, const char *username, const char *password, char *resp_msg, size_t resp_sz) {
-    
+    if (!check_uniqueness(username, user->email, user->phone, 0, resp_msg, resp_sz)) {
+        return 0; // Fail, resp_msg is set by check_uniqueness
+    }
     user->user_id = generate_new_userId();
     user->role = ROLE_CUSTOMER;
     user->active = STATUS_ACTIVE;
@@ -154,7 +162,7 @@ int add_new_customer(user_rec_t *user, account_rec_t *acc, const char *username,
     acc->account_id = user->user_id; 
     acc->balance = 0;
     acc->active = STATUS_ACTIVE;
-    acc->created_at = time(NULL);
+    // acc->created_at = time(NULL); // <-- THIS LINE WAS THE ERROR. It is now removed.
     
     if (write_user(user) && write_account(acc)) {
         snprintf(resp_msg, resp_sz, "Customer Added (ID: %u, Username: %s)", user->user_id, user->username);

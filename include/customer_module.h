@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include "server.h" // For data structure definitions
+#include "server.h" 
 
 int view_balance(uint32_t user_id, char *resp_msg, size_t resp_sz);
 int deposit_money(uint32_t user_id, double amount, char *resp_msg, size_t resp_sz);
@@ -15,5 +15,6 @@ int add_feedback(uint32_t user_id, const char *msg, char *resp_msg, size_t resp_
 int view_feedback_status(uint32_t user_id, char *resp_msg, size_t resp_sz);
 int view_transaction_history(uint32_t user_id, char *resp_msg, size_t resp_sz);
 int change_password(uint32_t user_id, const char *newpass, char *resp_msg, size_t resp_sz);
+int view_personal_details(uint32_t user_id, char *resp_msg, size_t resp_sz);
 
 #endif

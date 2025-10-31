@@ -76,7 +76,7 @@ void *client_thread_main(void *arg) {
             sscanf(payload,"%s %s",username,password);
             int userId; 
             char role[MAX_ROLE_STR];
-            char name[MAX_NAME_LEN]; // <-- NEW
+            char name[MAX_FNAME_LEN]; 
             int login_result; 
 
             // Attempt login and get status (and name)
@@ -193,16 +193,28 @@ void *client_thread_main(void *arg) {
             view_transaction_history(userId, resp.message, sizeof(resp.message));
         }
 
+        else if(strcmp(op,"VIEW_DETAILS")==0) { 
+            uint32_t userId;
+            sscanf(payload,"%u",&userId);
+            view_personal_details(userId, resp.message, sizeof(resp.message));
+        }
+
         // --- Employee Commands (All Routed Correctly) ---
         else if(strcmp(op,"ADD_CUSTOMER")==0) {
             user_rec_t user; 
             account_rec_t acc;
-            char name[MAX_NAME_LEN], address[MAX_ADDR_LEN], username[MAX_USERNAME_LEN], password[MAX_PASSWORD_LEN]; 
+            char fname[MAX_FNAME_LEN], lname[MAX_LNAME_LEN], address[MAX_ADDR_LEN], email[MAX_EMAIL_LEN], phone[MAX_PHONE_LEN];
+            char username[MAX_USERNAME_LEN], password[MAX_PASSWORD_LEN]; 
             int age;
-            if (sscanf(payload,"%s %d %s %s %s", name, &age, address, username, password) == 5) {
-                 strncpy(user.name, name, sizeof(user.name) - 1);
+            if (sscanf(payload,"%s %s %d %s %s %s %s %s", 
+                 fname, lname, &age, address, email, phone, username, password) == 8) {
+                 
+                 strncpy(user.first_name, fname, sizeof(user.first_name) - 1);
+                 strncpy(user.last_name, lname, sizeof(user.last_name) - 1);
                  user.age = age;
                  strncpy(user.address, address, sizeof(user.address) - 1);
+                 strncpy(user.email, email, sizeof(user.email) - 1);
+                 strncpy(user.phone, phone, sizeof(user.phone) - 1);
                  add_new_customer(&user, &acc, username, password, resp.message, sizeof(resp.message));
             } else {
                  snprintf(resp.message,sizeof(resp.message),"ADD_CUSTOMER: Invalid payload format.");
@@ -210,11 +222,11 @@ void *client_thread_main(void *arg) {
             }
         }
         else if(strcmp(op,"MODIFY_CUSTOMER")==0) {
-            uint32_t userId; char name[128],address[256]; int age;
+            uint32_t userId; char fname[MAX_FNAME_LEN], lname[MAX_LNAME_LEN], address[MAX_ADDR_LEN], email[MAX_EMAIL_LEN], phone[MAX_PHONE_LEN]; int age;
             
             // FIX: Match the client's payload format (ID, Age, Name, Address)
-            if (sscanf(payload,"%u %d %s %s",&userId,&age,name,address) == 4) {
-                modify_customer(userId,name,age,address,resp.message,sizeof(resp.message));
+            if (sscanf(payload,"%u %d %s %s %s %s %s",&userId,&age,fname,lname,address, email, phone) == 7) {
+                modify_customer(userId,fname,lname,age,address,email,phone,resp.message,sizeof(resp.message));
             } else {
                 snprintf(resp.message,sizeof(resp.message),"MODIFY_CUSTOMER: Invalid payload format.");
                 resp.status_code = 1;
@@ -259,22 +271,26 @@ void *client_thread_main(void *arg) {
 
         // --- Admin Commands ---
         else if(strcmp(op,"ADD_EMPLOYEE")==0) {
-            char name[MAX_NAME_LEN],address[MAX_ADDR_LEN],role[MAX_ROLE_STR],username[MAX_USERNAME_LEN],password[MAX_PASSWORD_LEN];
+            char fname[MAX_FNAME_LEN], lname[MAX_LNAME_LEN], address[MAX_ADDR_LEN],role[MAX_ROLE_STR];
+            char email[MAX_EMAIL_LEN], phone[MAX_PHONE_LEN];
+            char username[MAX_USERNAME_LEN],password[MAX_PASSWORD_LEN];
             int age;
             
-            if(sscanf(payload,"%s %d %s %s %s %s",name,&age,address,role,username,password) == 6) {
-                add_employee(name,age,address,role,username,password,resp.message,sizeof(resp.message));
+            // Payload: fname, lname, age, address, role, email, phone, username, password
+            if(sscanf(payload,"%s %s %d %s %s %s %s %s %s",
+                fname, lname, &age,address,role,email,phone,username,password) == 9) {
+                add_employee(fname,lname,age,address,role,email,phone,username,password,resp.message,sizeof(resp.message));
             } else {
                 snprintf(resp.message,sizeof(resp.message),"ADD_EMPLOYEE: Invalid payload format.");
                 resp.status_code = 1;
             }
         }
         else if(strcmp(op,"MODIFY_USER")==0) {
-            uint32_t userId; char name[128],address[256]; int age;
+            uint32_t userId; char fname[MAX_FNAME_LEN], lname[MAX_LNAME_LEN], address[MAX_ADDR_LEN], email[MAX_EMAIL_LEN], phone[MAX_PHONE_LEN]; int age;
 
             // FIX: Match the client's payload format (ID, Age, Name, Address)
-            if (sscanf(payload,"%u %d %s %s",&userId,&age,name,address) == 4) {
-                modify_user(userId,name,age,address,resp.message,sizeof(resp.message));
+            if (sscanf(payload,"%u %d %s %s %s %s %s",&userId,&age,fname,lname,address,email,phone) == 6) {
+                modify_user(userId,fname,lname,age,address,email,phone,resp.message,sizeof(resp.message));
             } else {
                 snprintf(resp.message,sizeof(resp.message),"MODIFY_USER: Invalid payload format.");
                 resp.status_code = 1;
@@ -291,9 +307,6 @@ void *client_thread_main(void *arg) {
         else snprintf(resp.message,sizeof(resp.message),"Unknown command");
 
         send_response(fd,&resp);
-        
-        // If client sends LOGOUT, we break the loop and the thread exits.
-        if (strcmp(op, "LOGOUT") == 0) break;
     }
 
     // --- Cleanup on thread exit (client disconnect or logout) ---

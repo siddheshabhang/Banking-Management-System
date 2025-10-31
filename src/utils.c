@@ -96,7 +96,7 @@ int verify_password(const char *password, const char *hash) {
 
 // --- User Login Function with Account Status Check (CRITICAL FIX) ---
 // Updated to return the user's name
-int login_user(const char *username, const char *password, int *userId, char *role, size_t role_sz, char *name_out, size_t name_sz) {
+int login_user(const char *username, const char *password, int *userId, char *role, size_t role_sz, char *fname_out, size_t fname_sz) {
     int fd = open(USERS_DB_FILE, O_RDONLY);
     if (fd < 0) return 0;
     
@@ -105,7 +105,7 @@ int login_user(const char *username, const char *password, int *userId, char *ro
     int found = 0; 
     
     // Clear the name buffer
-    name_out[0] = '\0';
+    fname_out[0] = '\0';
 
     while (read(fd, &user, sizeof(user_rec_t)) == sizeof(user_rec_t)) {
         if (strcmp(user.username, username) == 0) {
@@ -121,7 +121,7 @@ int login_user(const char *username, const char *password, int *userId, char *ro
                     *userId = user.user_id;
                     
                     // Copy the name out
-                    strncpy(name_out, user.name, name_sz - 1);
+                    strncpy(fname_out, user.first_name, fname_sz - 1);
                     
                     // Map role enum to string
                     if (user.role == ROLE_CUSTOMER) strncpy(role, "customer", role_sz);
@@ -331,10 +331,13 @@ int write_account(account_rec_t *acc) {
     account_rec_t tmp;
     off_t pos = 0;
     int found = 0;
+    int success = 0;
     while(read(fd, &tmp, sizeof(account_rec_t)) == sizeof(account_rec_t)) {
         if(tmp.user_id == acc->user_id) {
             lseek(fd, pos, SEEK_SET);
-            write(fd, acc, sizeof(account_rec_t));
+            if (write(fd, acc, sizeof(account_rec_t)) == sizeof(account_rec_t)) { // 
+                success = 1;
+            }
             found = 1;
             break;
         }
@@ -342,7 +345,9 @@ int write_account(account_rec_t *acc) {
     }
     if (!found) { 
         lseek(fd, 0, SEEK_END);
-        write(fd, acc, sizeof(account_rec_t));
+        if (write(fd, acc, sizeof(account_rec_t)) == sizeof(account_rec_t)) { // 
+            success = 1;
+        }
     }
     unlock_file(fd);
     close(fd);
@@ -376,10 +381,13 @@ int write_user(user_rec_t *user) {
     user_rec_t tmp;
     off_t pos = 0;
     int found = 0;
+    int success = 0;
     while(read(fd, &tmp, sizeof(user_rec_t)) == sizeof(user_rec_t)) {
         if(tmp.user_id == user->user_id) {
             lseek(fd, pos, SEEK_SET);
-            write(fd, user, sizeof(user_rec_t));
+            if(write(fd, user, sizeof(user_rec_t)) == sizeof(user_rec_t)) { // 
+                success = 1;
+            }
             found = 1;
             break;
         }
@@ -387,7 +395,9 @@ int write_user(user_rec_t *user) {
     }
     if (!found) { 
         lseek(fd, 0, SEEK_END);
-        write(fd, user, sizeof(user_rec_t));
+        if(write(fd, user, sizeof(user_rec_t)) == sizeof(user_rec_t)) { // 
+            success = 1;
+        }
     }
     unlock_file(fd);
     close(fd);
@@ -400,7 +410,7 @@ int append_transaction(txn_rec_t *tx) {
     if(fd < 0) return 0;
     lock_file(fd); // Full file lock
     tx->txn_id = lseek(fd, 0, SEEK_END) / sizeof(txn_rec_t) + 1;
-    write(fd, tx, sizeof(txn_rec_t));
+    int success = (write(fd, tx, sizeof(txn_rec_t)) == sizeof(txn_rec_t)); //
     unlock_file(fd);
     close(fd);
     return 1;
@@ -433,10 +443,13 @@ int write_loan(loan_rec_t *loan) {
     loan_rec_t tmp;
     off_t pos = 0;
     int found = 0;
+    int success = 0;
     while(read(fd, &tmp, sizeof(loan_rec_t)) == sizeof(loan_rec_t)) {
         if(tmp.loan_id == loan->loan_id) {
             lseek(fd, pos, SEEK_SET);
-            write(fd, loan, sizeof(loan_rec_t));
+            if (write(fd, loan, sizeof(loan_rec_t)) == sizeof(loan_rec_t)) { // 
+                success = 1;
+            }
             found = 1;
             break;
         }
@@ -444,7 +457,9 @@ int write_loan(loan_rec_t *loan) {
     }
     if (!found) {
         lseek(fd, 0, SEEK_END);
-        write(fd, loan, sizeof(loan_rec_t));
+        if (write(fd, loan, sizeof(loan_rec_t)) == sizeof(loan_rec_t)) { // 
+            success = 1;
+        }
     }
     unlock_file(fd);
     close(fd);
@@ -457,7 +472,7 @@ int append_loan(loan_rec_t *loan) {
     if(fd < 0) return 0;
     lock_file(fd);
     loan->loan_id = lseek(fd, 0, SEEK_END) / sizeof(loan_rec_t) + 1;
-    write(fd, loan, sizeof(loan_rec_t));
+    int success = (write(fd, loan, sizeof(loan_rec_t)) == sizeof(loan_rec_t)); 
     unlock_file(fd);
     close(fd);
     return 1;
@@ -469,7 +484,7 @@ int append_feedback(feedback_rec_t *fb) {
     if(fd < 0) return 0;
     lock_file(fd);
     fb->fb_id = lseek(fd, 0, SEEK_END) / sizeof(feedback_rec_t) + 1;
-    write(fd, fb, sizeof(feedback_rec_t));
+    int success = (write(fd, fb, sizeof(feedback_rec_t)) == sizeof(feedback_rec_t));
     unlock_file(fd);
     close(fd);
     return 1;
@@ -483,10 +498,13 @@ int write_feedback(feedback_rec_t *fb) {
     feedback_rec_t tmp;
     off_t pos = 0;
     int found = 0;
+    int success = 0;
     while(read(fd, &tmp, sizeof(feedback_rec_t)) == sizeof(feedback_rec_t)) {
         if(tmp.fb_id == fb->fb_id) {
             lseek(fd, pos, SEEK_SET);
-            write(fd, fb, sizeof(feedback_rec_t));
+            if(write(fd, fb, sizeof(feedback_rec_t)) == sizeof(feedback_rec_t)) { // 
+                success = 1;
+            }
             found = 1;
             break;
         }
@@ -494,7 +512,9 @@ int write_feedback(feedback_rec_t *fb) {
     }
     if (!found) {
         lseek(fd, 0, SEEK_END);
-        write(fd, fb, sizeof(feedback_rec_t));
+        if(write(fd, fb, sizeof(feedback_rec_t)) == sizeof(feedback_rec_t)) { // 
+            success = 1;
+        }
     }
     unlock_file(fd);
     close(fd);
@@ -529,4 +549,43 @@ int generate_new_userId() {
     unlock_file(fd);
     close(fd);
     return 1001 + count; // Start IDs from 1001
+}
+
+int check_uniqueness(const char* username, const char* email, const char* phone, 
+                     uint32_t current_user_id, char* resp_msg, size_t resp_sz) {
+    int fd = open(USERS_DB_FILE, O_RDONLY);
+    if (fd < 0) {
+        // This is fine if the file doesn't exist yet (first user)
+        return 1;
+    }
+    
+    lock_file(fd); // Lock the file for a consistent read [cite: 3]
+    user_rec_t user;
+    int is_unique = 1;
+
+    while (read(fd, &user, sizeof(user_rec_t)) == sizeof(user_rec_t)) {
+        if (user.user_id == current_user_id) {
+            continue; // Skip self-check when modifying
+        }
+
+        if (strcmp(user.username, username) == 0) {
+            snprintf(resp_msg, resp_sz, "Error: Username '%s' already exists.", username);
+            is_unique = 0;
+            break;
+        }
+        if (strcmp(user.email, email) == 0) {
+            snprintf(resp_msg, resp_sz, "Error: Email '%s' already exists.", email);
+            is_unique = 0;
+            break;
+        }
+        if (strcmp(user.phone, phone) == 0) {
+            snprintf(resp_msg, resp_sz, "Error: Phone '%s' already exists.", phone);
+            is_unique = 0;
+            break;
+        }
+    }
+    
+    unlock_file(fd);
+    close(fd);
+    return is_unique;
 }
