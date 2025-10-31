@@ -90,19 +90,19 @@ banking-management-system/
 │   ├── customer_module.h
 │   ├── employee_module.h
 │   ├── manager_module.h
-│   ├── server.h          
-│   └── utils.h           
+│   ├── server.h
+│   └── utils.h
 │
 ├── src/                  # Source files (.c) implementing the logic
 │   ├── admin_module.c
-│   ├── bootstrap.c       
-│   ├── client.c          
+│   ├── bootstrap.c
+│   ├── client.c
 │   ├── customer_module.c
-│   ├── db_inspector.c    
+│   ├── db_inspector.c
 │   ├── employee_module.c
 │   ├── manager_module.c
-│   ├── server.c          
-│   └── utils.c           
+│   ├── server.c
+│   └── utils.c
 │
 ├── db/                   # Data files (.db) - (Created by bootstrap)
 │   └── (Contains .db files like users.db, accounts.db, etc.)
