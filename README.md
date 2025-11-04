@@ -81,7 +81,7 @@ The system is hardened against common errors and bad user input.
     * The server robustly handles unexpected client disconnects (`Ctrl+C`). The `recv_request()` call will fail, causing the client thread to exit. The thread's cleanup logic calls `remove_active_session()`, freeing the user's slot for a new login.
 * **System Call Robustness:**
     * The return values of `read()` and `write()` are checked in `send_request_and_get_response` to detect server disconnects and prevent partial data sends/receives.
-
+```
 ## 📁 Project Structure
 banking-management-system/
 ├── include/              # Header files (.h) defining interfaces and structures
@@ -113,7 +113,7 @@ banking-management-system/
 ├── inspector             # (Compiled) Utility to read .db files
 ├── server                # (Compiled) Server executable
 └── client                # (Compiled) Client executable
-
+```
 ## 🧩 Modules
 
 The project is structured into logical modules:
