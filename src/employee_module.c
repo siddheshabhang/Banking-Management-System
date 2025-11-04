@@ -7,16 +7,14 @@
 #include <fcntl.h>  
 #include <unistd.h> 
 
-// --- Prototype for the function defined in customer_module.c ---
-int deposit_modifier(account_rec_t *acc, void *data);
+/* --- EMPLOYEE MODULE LOGIC (Customer/Loan Management) --- */
 
-// --- Transaction data struct (must match customer_module.c) ---
+int deposit_modifier(account_rec_t *acc, void *data);   // Prototype from customer_module.c
 typedef struct {
     double amount;
 } txn_data_t;
 
-
-// --- Modifier for approve_reject_loan ---
+/* --- Modifier for approve_reject_loan (Atomic Loan Update Logic) --- */
 typedef struct {
     const char *action;
     uint32_t emp_id;
@@ -24,36 +22,36 @@ typedef struct {
     size_t resp_sz;
 } approve_loan_data;
 
-// This function contains the logic that will be run *while the lock is held*
+// Loan modification logic (Executed under loan record lock)
 int approve_reject_loan_modifier(loan_rec_t *loan, void *data) {
     approve_loan_data *d = (approve_loan_data*)data;
 
+    // Consistency Checks
     if(loan->status != LOAN_ASSIGNED) {
         snprintf(d->resp_msg, d->resp_sz, "Loan not assigned to an employee or already processed.");
         return 0; 
     }
     if(loan->assigned_to != d->emp_id) {
          snprintf(d->resp_msg, d->resp_sz, "Loan not assigned to you.");
-         return 0; // Abort
+         return 0; 
     }
     
     if(strcmp(d->action,"approve")==0) {
         loan->status = LOAN_APPROVED;
         
-        // --- Sequential Atomic Operation ---
+        /* --- CRITICAL: SEQUENTIAL ATOMIC OPERATION (Loan Approval + Deposit) --- */
         
         // 1. Check account status *before* trying to deposit
         account_rec_t cust_acc;
         if (!read_account(loan->user_id, &cust_acc) || cust_acc.active == STATUS_INACTIVE) {
             snprintf(d->resp_msg, d->resp_sz, "Loan Approval Failed: Customer account is inactive or not found.");
-            return 0; // Abort loan status change
+            return 0; 
         }
         
         // 2. Prepare the data for the *external* deposit_modifier
         txn_data_t deposit_data = {loan->amount};
         
         // 3. Perform the atomic deposit
-        // (This now calls the function from customer_module.c)
         if (!atomic_update_account(loan->user_id, deposit_modifier, &deposit_data)) {
             snprintf(d->resp_msg, d->resp_sz, "Loan Decision Failed: Approved, but failed to deposit funds.");
             return 0; // Abort loan status change
@@ -69,33 +67,29 @@ int approve_reject_loan_modifier(loan_rec_t *loan, void *data) {
     }
     else {
         snprintf(d->resp_msg, d->resp_sz, "Invalid action. Use 'approve' or 'reject'.");
-        return 0; // Abort
+        return 0; 
     }
     
     loan->processed_at = time(NULL);
     snprintf(d->resp_msg, d->resp_sz, "Loan ID %llu Decision Recorded: %s", (unsigned long long)loan->loan_id, d->action);
-    return 1; // Commit loan status change
+    return 1; 
 }
 
 
-// --- REFACTORED approve_reject_loan ---
-// This now simply calls the atomic handler
+// approve_reject_loan (Wrapper for atomic loan update)
 int approve_reject_loan(uint64_t loan_id, const char *action, uint32_t emp_id, char *resp_msg, size_t resp_sz) {
     approve_loan_data data = {action, emp_id, resp_msg, resp_sz};
     
     if (atomic_update_loan(loan_id, approve_reject_loan_modifier, &data)) {
-        return 1; // Success
+        return 1; 
     }
-
     if (resp_msg[0] == '\0') {
-         // Set a generic error if the modifier didn't
          snprintf(resp_msg, resp_sz, "Loan Decision Failed (Loan not found or concurrency error)");
     }
     return 0;
 }
 
-
-// --- Modifier for modify_customer ---
+/* --- Modifier for modify_customer (Atomic User Update Logic) --- */
 typedef struct {
     const char *first_name;
     const char *last_name;
@@ -112,11 +106,12 @@ int modify_customer_modifier(user_rec_t *user, void *data) {
 
     if (user->role != ROLE_CUSTOMER) {
          snprintf(d->resp_msg, d->resp_sz, "Cannot modify non-customer user.");
-         return 0; // Abort
+         return 0; 
     }
-
+    
+    // Concurrency Check: Ensure uniqueness (Uses full-file lock internally)
     if (!check_uniqueness(user->username, d->email, d->phone, user->user_id, d->resp_msg, d->resp_sz)) {
-        return 0; // Abort, resp_msg already set by check_uniqueness
+        return 0; 
     }
     
     strncpy(user->first_name, d->first_name, sizeof(user->first_name) - 1);
@@ -126,10 +121,10 @@ int modify_customer_modifier(user_rec_t *user, void *data) {
     strncpy(user->email, d->email, sizeof(user->email) - 1);
     strncpy(user->phone, d->phone, sizeof(user->phone) - 1);
     snprintf(d->resp_msg, d->resp_sz, "Customer Modified (ID: %u).\nNew Details:\nName: %s %s\nAge: %d\nAddress: %s\nEmail: %s\nPhone: %s", user->user_id, user->first_name, user->last_name, user->age, user->address, user->email, user->phone);
-    return 1; // Commit
+    return 1; 
 }
 
-// --- REFACTORED modify_customer ---
+// modify_customer (Wrapper for atomic user update)
 int modify_customer(uint32_t user_id, const char *first_name, const char *last_name, int age, const char *address, const char *email, const char *phone, char *resp_msg, size_t resp_sz) {
     modify_cust_data data = {first_name, last_name, age, address, email, phone, resp_msg, resp_sz};
     if (atomic_update_user(user_id, modify_customer_modifier, &data)) {
@@ -142,13 +137,10 @@ int modify_customer(uint32_t user_id, const char *first_name, const char *last_n
     return 0;
 }
 
-
-// --- (Other functions remain the same) ---
-
-// This function is safe, as it appends new records using full-file-lock functions
+// add_new_customer (Atomic creation of user and account)
 int add_new_customer(user_rec_t *user, account_rec_t *acc, const char *username, const char *password, char *resp_msg, size_t resp_sz) {
     if (!check_uniqueness(username, user->email, user->phone, 0, resp_msg, resp_sz)) {
-        return 0;   // Fail, resp_msg is set by check_uniqueness
+        return 0;   
     }
     user->user_id = generate_new_userId();
     user->role = ROLE_CUSTOMER;
@@ -172,7 +164,7 @@ int add_new_customer(user_rec_t *user, account_rec_t *acc, const char *username,
     return 0;
 }
 
-// This function is safe (read-only list)
+// view_assigned_loans (Read-only list)
 int view_assigned_loans(uint32_t emp_id, char *resp_msg, size_t resp_sz) {
     int fd = open(LOANS_DB_FILE, O_RDONLY);
     if(fd<0) { snprintf(resp_msg,resp_sz,"No loans file found"); return 0; }
@@ -204,7 +196,7 @@ int view_assigned_loans(uint32_t emp_id, char *resp_msg, size_t resp_sz) {
     return 1;
 }
 
-// This function is safe (read-only list)
+// process_loans (View unassigned loans - Read-only list)
 int process_loans(char *resp_msg, size_t resp_sz) {
     int fd = open(LOANS_DB_FILE, O_RDONLY);
     if(fd<0) { snprintf(resp_msg,resp_sz,"No loans file found"); return 0; }
@@ -236,6 +228,7 @@ int process_loans(char *resp_msg, size_t resp_sz) {
     return 1;
 }
 
+// view_customer_transactions (Auditing tool - Read-only list, reads backward)
 int view_customer_transactions(uint32_t custId, char *resp_msg, size_t resp_sz) {
     
     user_rec_t user;

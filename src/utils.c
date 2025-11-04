@@ -3,28 +3,24 @@
 #include <unistd.h> // For crypt() on macOS
 
 /*
- * ===================================================================
- * HELPER PROTOTYPES
- * (These are internal to utils.c and don't need to be in utils.h)
- * ===================================================================
+ * --- UTILITY MODULE (System Calls, Persistence, Concurrency) ---
+ * Provides atomic, file-locked operations crucial for data integrity.
  */
 
-// Generic record locking
+// Generic record locking (internal use)
 static int lock_record(int fd, long offset, size_t record_size);
 static int unlock_record(int fd, long offset, size_t record_size);
 
-// Finders
+// Finders (internal use)
 static long find_user_offset(uint32_t userId);
 static long find_account_offset(uint32_t userId);
 static long find_loan_offset(uint64_t loanId);
 
 /*
- * ===================================================================
- * GENERIC LOCKING FUNCTIONS
- * ===================================================================
+ * --- FILE LOCKING (fcntl System Call) ---
  */
 
-// Acquire exclusive lock on ENTIRE file
+// Acquire exclusive lock on ENTIRE file (Used for search/append)
 int lock_file(int fd) {
     struct flock lock;
     memset(&lock, 0, sizeof(lock));
@@ -46,7 +42,7 @@ int unlock_file(int fd) {
     return fcntl(fd, F_SETLKW, &lock);
 }
 
-// --- Lock a single record for exclusive access (Write Lock) ---
+// Lock a single record for exclusive access (RECORD LOCKING)
 static int lock_record(int fd, long offset, size_t record_size) {
     struct flock lock;
     memset(&lock, 0, sizeof(lock));
@@ -57,7 +53,7 @@ static int lock_record(int fd, long offset, size_t record_size) {
     return fcntl(fd, F_SETLKW, &lock); 
 }
 
-// --- Unlock a single record ---
+// Unlock a single record
 static int unlock_record(int fd, long offset, size_t record_size) {
     struct flock lock;
     memset(&lock, 0, sizeof(lock));
@@ -69,12 +65,10 @@ static int unlock_record(int fd, long offset, size_t record_size) {
 }
 
 /*
- * ===================================================================
- * AUTH & HASHING
- * ===================================================================
+ * --- AUTH & HASHING (Security) ---
  */
 
-// Generate hash of password
+// Generate password hash (System Call: crypt with SHA-512)
 void generate_password_hash(const char *password, char *hash_output, size_t hash_size) {
     const char *salt = "$6$IIITB$";        // $6$ denotes SHA-512
     char *hashed = crypt(password, salt);
@@ -93,8 +87,7 @@ int verify_password(const char *password, const char *hash) {
     return (strcmp(verified_hash, hash) == 0);
 }
 
-// --- User Login Function with Account Status Check (CRITICAL FIX) ---
-// Updated to return the user's name
+// User Login Function (Uses full-file lock for safe read)
 int login_user(const char *username, const char *password, int *userId, char *role, size_t role_sz, char *fname_out, size_t fname_sz) {
     int fd = open(USERS_DB_FILE, O_RDONLY);
     if (fd < 0) return 0;
@@ -102,8 +95,6 @@ int login_user(const char *username, const char *password, int *userId, char *ro
     lock_file(fd);
     user_rec_t user;
     int found = 0; 
-    
-    // Clear the name buffer
     fname_out[0] = '\0';
 
     while (read(fd, &user, sizeof(user_rec_t)) == sizeof(user_rec_t)) {
@@ -119,17 +110,14 @@ int login_user(const char *username, const char *password, int *userId, char *ro
                 } else {
                     *userId = user.user_id;
                     
-                    // Copy the name out
                     strncpy(fname_out, user.first_name, fname_sz - 1);
-                    
-                    // Map role enum to string
                     if (user.role == ROLE_CUSTOMER) strncpy(role, "customer", role_sz);
                     else if (user.role == ROLE_EMPLOYEE) strncpy(role, "employee", role_sz);
                     else if (user.role == ROLE_MANAGER) strncpy(role, "manager", role_sz);
                     else if (user.role == ROLE_ADMIN) strncpy(role, "admin", role_sz);
                     else strncpy(role, "unknown", role_sz);
 
-                    found = 1; // SUCCESS
+                    found = 1; 
                 }
             }
             break; 
@@ -141,15 +129,13 @@ int login_user(const char *username, const char *password, int *userId, char *ro
 }
 
 /*
- * ===================================================================
- * NEW ATOMIC R-M-W HANDLERS
- * ===================================================================
+ * --- ATOMIC R-M-W HANDLERS (Core Concurrency Primitives) ---
  */
-// --- Offset Finder for Users ---
+// Offset Finder for Users (Full-file lock for consistent search)
 static long find_user_offset(uint32_t userId) {
     int fd = open(USERS_DB_FILE, O_RDONLY);
     if (fd < 0) return -1;
-    lock_file(fd); // Full file lock to safely search
+    lock_file(fd); 
     user_rec_t tmp;
     long current_offset = 0;
     long found_offset = -1;
@@ -165,7 +151,7 @@ static long find_user_offset(uint32_t userId) {
     return found_offset;
 }
 
-// --- Atomic R-M-W for users.db ---
+// Atomic R-M-W for users.db (Record-level lock guarantees isolation)
 int atomic_update_user(uint32_t userId, int (*modifier)(user_rec_t *user, void *data), void *modifier_data) {
     long offset = find_user_offset(userId);
     if (offset < 0) return 0; // Not found
@@ -195,7 +181,7 @@ int atomic_update_user(uint32_t userId, int (*modifier)(user_rec_t *user, void *
     return success;
 }
 
-// --- Offset Finder for Accounts ---
+// Offset Finder for Accounts
 static long find_account_offset(uint32_t userId) {
     int fd = open(ACCOUNTS_DB_FILE, O_RDONLY);
     if (fd < 0) return -1;
@@ -215,7 +201,7 @@ static long find_account_offset(uint32_t userId) {
     return found_offset;
 }
 
-// --- Atomic R-M-W for accounts.db ---
+// Atomic R-M-W for accounts.db (Record-level lock - essential for financial ops)
 int atomic_update_account(uint32_t userId, int (*modifier)(account_rec_t *acc, void *data), void *modifier_data) {
     long offset = find_account_offset(userId);
     if (offset < 0) 
@@ -247,7 +233,7 @@ int atomic_update_account(uint32_t userId, int (*modifier)(account_rec_t *acc, v
     return success;
 }
 
-// --- Offset Finder for Loans ---
+// Offset Finder for Loans
 static long find_loan_offset(uint64_t loanId) {
     int fd = open(LOANS_DB_FILE, O_RDONLY);
     if (fd < 0) return -1;
@@ -267,7 +253,7 @@ static long find_loan_offset(uint64_t loanId) {
     return found_offset;
 }
 
-// --- Atomic R-M-W for loans.db ---
+// Atomic R-M-W for loans.db (Record-level lock)
 int atomic_update_loan(uint64_t loanId, int (*modifier)(loan_rec_t *loan, void *data), void *modifier_data) {
     long offset = find_loan_offset(loanId);
     if (offset < 0) return 0; // Not found
@@ -299,17 +285,13 @@ int atomic_update_loan(uint64_t loanId, int (*modifier)(loan_rec_t *loan, void *
 
 
 /*
- * ===================================================================
- * NON-ATOMIC PERSISTENCE HELPERS
- * (Used for login, bootstrap, appends, and non-racy operations)
- * ===================================================================
+ * --- NON-ATOMIC PERSISTENCE HELPERS (Full-File Lock on Read/Write) ---
  */
-
 // Read account
 int read_account(int userId, account_rec_t *acc) {
     int fd = open(ACCOUNTS_DB_FILE, O_RDONLY);
     if(fd < 0) return 0;
-    lock_file(fd); // Full file lock
+    lock_file(fd); 
     account_rec_t tmp;
     int found = 0;
     while(read(fd, &tmp, sizeof(account_rec_t)) == sizeof(account_rec_t)) {
@@ -541,7 +523,7 @@ int read_feedback(uint64_t fbId, feedback_rec_t *fb) {
     return found;
 }
 
-// Simple unique ID generation
+// Simple unique ID generation (Atomic: Full-file lock + lseek)
 int generate_new_userId() {
     int fd = open(USERS_DB_FILE, O_RDONLY | O_CREAT, 0666);
     if (fd < 0) 
@@ -553,6 +535,7 @@ int generate_new_userId() {
     return 1001 + count;    // Start IDs from 1001
 }
 
+// Checks for unique username/email/phone (Concurrency: Full-file lock for atomicity)
 int check_uniqueness(const char* username, const char* email, const char* phone, uint32_t current_user_id, char* resp_msg, size_t resp_sz) {
     int fd = open(USERS_DB_FILE, O_RDONLY);
     if (fd < 0) {   // Unable to open file, assume unique

@@ -14,18 +14,23 @@
 #include <pthread.h>
 #include <fcntl.h>
 
+/* --- SERVER CONFIGURATION --- */
 #define DEFAULT_PORT 9090 
 #define MAX_CLIENTS 100
 #define BACKLOG 10
+#define MAX_MSG_LEN 1024
+
+/* --- MAX LENGTHS --- */
 #define MAX_USERNAME_LEN 64
 #define MAX_PASSWORD_LEN 128
 #define MAX_ADDR_LEN 256
 #define MAX_ROLE_STR 32
-#define MAX_MSG_LEN 1024
 #define MAX_FNAME_LEN 64
 #define MAX_LNAME_LEN 64
 #define MAX_EMAIL_LEN 64
 #define MAX_PHONE_LEN 16
+
+/* --- FILE PATHS (Persistence Layer) --- */
 #define DB_DIR "./db"         
 #define USERS_DB_FILE DB_DIR"/users.db"
 #define ACCOUNTS_DB_FILE DB_DIR"/accounts.db"
@@ -33,6 +38,7 @@
 #define LOANS_DB_FILE DB_DIR"/loans.db"
 #define FEEDBACK_DB_FILE DB_DIR"/feedback.db"
 
+/* --- ENUMS (Core Logic States) --- */
 typedef enum {  
     ROLE_CUSTOMER = 0,
     ROLE_EMPLOYEE,
@@ -49,6 +55,8 @@ typedef enum {
     LOAN_APPROVED, 
     LOAN_REJECTED 
 } loan_status_t;
+
+/* --- DATA STRUCTURES (Binary File Records) --- */
 typedef struct {
     uint32_t user_id;                         
     char username[MAX_USERNAME_LEN];          
@@ -95,6 +103,8 @@ typedef struct {
     char action_taken[256];
     time_t submitted_at;
 } feedback_rec_t;
+
+/* --- SERVER CONTEXT (Concurrency/Threading) --- */
 typedef struct {
     int client_fd;
     struct sockaddr_in client_addr;
@@ -103,19 +113,21 @@ typedef struct {
     int listen_fd;
     int port;
     pthread_t accept_thread;
-    pthread_mutex_t db_lock;  
+    pthread_mutex_t db_lock;    // Global Mutex for Session Mgmt
     volatile int running;
 } server_ctx_t;
-typedef struct {
-    char op[64];             
-    char payload[MAX_MSG_LEN]; 
-} request_t;
 
+/* --- NETWORK PROTOCOL STRUCTURES --- */
 typedef struct {
-    int status_code;         
-    char message[MAX_MSG_LEN];
+    char op[64];        // Operation command           
+    char payload[MAX_MSG_LEN];  // Operation-specific data
+} request_t;
+typedef struct {
+    int status_code;        // 0: Success, non-zero: Error 
+    char message[MAX_MSG_LEN];  // Detailed Response message
 } response_t;
 
+/* --- SERVER FUNCTION PROTOTYPES --- */
 int server_init(server_ctx_t *ctx, int port);
 int server_start(server_ctx_t *ctx);
 void server_stop(server_ctx_t *ctx);

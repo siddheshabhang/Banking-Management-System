@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "utils.h"
 
+/* --- MANAGER MODULE INTERFACE (Oversight/Approvals) --- */
 int set_account_status(uint32_t custId, int status, char *resp_msg, size_t resp_sz);
 int view_non_assigned_loans(char *resp_msg, size_t resp_sz);
 int assign_loan_to_employee(uint32_t loanId, uint32_t empId, char *resp_msg, size_t resp_sz);

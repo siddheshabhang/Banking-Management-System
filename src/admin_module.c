@@ -5,7 +5,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// --- Helper to convert role_t to string for listing ---
+/* --- ADMIN MODULE LOGIC (User Management) --- */
+
+// Helper to convert role_t to string for the user list
 static const char *get_role_str_for_list(role_t role) {
     switch (role)
     {
@@ -22,7 +24,7 @@ static const char *get_role_str_for_list(role_t role) {
     }
 }
 
-// --- Modifier for modify_user ---
+/* --- Modifier for modify_user (Atomic User Update Logic) --- */
 typedef struct
 {
     const char *first_name;
@@ -35,7 +37,7 @@ typedef struct
     size_t resp_sz;
 } modify_user_data;
 
-// --- REFACTORED modify_user ---
+// User modification logic (Executed under user record lock)
 int modify_user_modifier(user_rec_t *user, void *data)
 {
     modify_user_data *d = (modify_user_data *)data;
@@ -53,6 +55,7 @@ int modify_user_modifier(user_rec_t *user, void *data)
     return 1; 
 }
 
+// modify_user (Wrapper for atomic user update)
 int modify_user(uint32_t userId, const char *first_name, const char *last_name, int age, const char *address, const char *email, const char *phone, char *resp_msg, size_t resp_sz)
 {
     modify_user_data data = {first_name, last_name, age, address, email, phone, resp_msg, resp_sz};
@@ -66,7 +69,7 @@ int modify_user(uint32_t userId, const char *first_name, const char *last_name, 
     return 0;
 }
 
-// --- Modifier for change_user_role ---
+/* --- Modifier for change_user_role (Atomic Role Update Logic) --- */
 typedef struct
 {
     const char *role_str;
@@ -74,7 +77,6 @@ typedef struct
     size_t resp_sz;
 } change_role_data;
 
-// --- REFACTORED change_user_role ---
 int change_role_modifier(user_rec_t *user, void *data)
 {
     change_role_data *d = (change_role_data *)data;
@@ -102,6 +104,7 @@ int change_role_modifier(user_rec_t *user, void *data)
     return 1; 
 }
 
+// change_user_role (Wrapper for atomic user update)
 int change_user_role(uint32_t userId, const char *role_str, char *resp_msg, size_t resp_sz)
 {
     change_role_data data = {role_str, resp_msg, resp_sz};
@@ -118,7 +121,7 @@ int change_user_role(uint32_t userId, const char *role_str, char *resp_msg, size
     return 0;
 }
 
-// This function adds a new employee (employee or manager)
+// add_employee (Adds new staff user - Atomic creation)
 int add_employee(const char *first_name, const char *last_name, int age, const char *address, const char *role_str, const char *email, const char *phone, const char *username, const char *password, char *resp_msg, size_t resp_sz)
 {
     if (!check_uniqueness(username, email, phone, 0, resp_msg, resp_sz)) {     
@@ -163,7 +166,7 @@ int add_employee(const char *first_name, const char *last_name, int age, const c
     return 0;
 }
 
-// List all users except admins
+// list_all_users (Read-only list)
 int list_all_users(char *resp_msg, size_t resp_sz)
 {
     int fd = open(USERS_DB_FILE, O_RDONLY);

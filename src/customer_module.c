@@ -5,30 +5,30 @@
 #include <time.h>
 #include <stddef.h>
 
-// --- Transaction Modifiers (Used by atomic_update_account) ---
+/* --- CUSTOMER MODULE LOGIC (Financial Transactions) --- */
 typedef struct {
     double amount;
 } txn_data_t;
 
-// Modifier function for deposit
+// Modifier for DEPOSIT (Executed under Record-Level Lock)
 int deposit_modifier(account_rec_t *acc, void *data) {
     txn_data_t *txn = (txn_data_t*)data;
-    if (acc->active == STATUS_INACTIVE) return 0; // Fail if inactive
+    if (acc->active == STATUS_INACTIVE) return 0; 
     acc->balance += txn->amount;
-    return 1; // Success
+    return 1; 
 }
 
-// Modifier function for withdrawal
+// Modifier for WITHDRAWAL (Executed under Record-Level Lock)
 int withdraw_modifier(account_rec_t *acc, void *data) {
     txn_data_t *txn = (txn_data_t*)data;
-    if (acc->active == STATUS_INACTIVE) return 0; // Fail if inactive
-    if (acc->balance < txn->amount) return 0; // Insufficient Balance
+    if (acc->active == STATUS_INACTIVE) return 0; 
+    if (acc->balance < txn->amount) return 0; 
     acc->balance -= txn->amount;
-    return 1; // Success
+    return 1; 
 }
 
 
-// --- Modifier for change_password ---
+/* --- Modifier for change_password (Atomic user update) --- */
 typedef struct {
     const char *newpass;
     char *resp_msg;
@@ -37,30 +37,24 @@ typedef struct {
 
 int change_pass_modifier(user_rec_t *user, void *data) {
     change_pass_data *d = (change_pass_data*)data;
-    
-    // Generate new hash and store it
     generate_password_hash(d->newpass, user->password_hash, sizeof(user->password_hash));
     
     snprintf(d->resp_msg, d->resp_sz, "Password changed successfully");
-    return 1; // Commit
+    return 1; 
 }
 
-// --- REFACTORED change_password ---
-// This function now uses the atomic handler to prevent race conditions
+// change_password (Concurrency: Uses atomic_update_user)
 int change_password(uint32_t user_id, const char *newpass, char *resp_msg, size_t resp_sz) {
     change_pass_data data = {newpass, resp_msg, resp_sz};
-
     if (atomic_update_user(user_id, change_pass_modifier, &data)) {
-        return 1; // Success, resp_msg was set by modifier
+        return 1; 
     }
-    
-    // Failed
     snprintf(resp_msg, resp_sz, "Password change failed (User not found or concurrency error)");
     return 0;
 }
 
 
-// --- (Other functions remain the same) ---
+// view_personal_details (Read-only)
 int view_personal_details(uint32_t user_id, char *resp_msg, size_t resp_sz) {
     user_rec_t user;
     if (!read_user(user_id, &user)) {
@@ -82,6 +76,7 @@ int view_personal_details(uint32_t user_id, char *resp_msg, size_t resp_sz) {
     return 1;
 }
 
+// view_balance (Read-only)
 int view_balance(uint32_t user_id, char *resp_msg, size_t resp_sz) {
     account_rec_t acc;
     if(!read_account(user_id, &acc)) {
@@ -92,7 +87,7 @@ int view_balance(uint32_t user_id, char *resp_msg, size_t resp_sz) {
     return 1;
 }
 
-// FIX: Now uses atomic_update_account for thread safety
+// deposit_money (Atomic Transaction: Lock + Modify + Atomic Log)
 int deposit_money(uint32_t user_id, double amount, char *resp_msg, size_t resp_sz) {
     if (amount <= 0) {
         snprintf(resp_msg, resp_sz, "Deposit amount must be positive.");
@@ -100,17 +95,12 @@ int deposit_money(uint32_t user_id, double amount, char *resp_msg, size_t resp_s
     }
     
     txn_data_t data = {amount};
-    
-    // This function automatically inherits the new RECORD locking
     if (atomic_update_account(user_id, deposit_modifier, &data)) {
-        // Log transaction
         txn_rec_t tx = {0, 0, user_id, amount, time(NULL), "deposit"};
         append_transaction(&tx);
         snprintf(resp_msg, resp_sz, "Deposit Successful: %.2lf", amount);
         return 1;
     }
-    
-    // Check failure reason
     account_rec_t acc;
     if (read_account(user_id, &acc) && acc.active == STATUS_INACTIVE) {
         snprintf(resp_msg, resp_sz, "Deposit Failed: Account is inactive");
@@ -120,7 +110,7 @@ int deposit_money(uint32_t user_id, double amount, char *resp_msg, size_t resp_s
     return 0;
 }
 
-// FIX: Now uses atomic_update_account for thread safety
+// withdraw_money (Atomic Transaction: Lock + Modify + Atomic Log)
 int withdraw_money(uint32_t user_id, double amount, char *resp_msg, size_t resp_sz) {
      if (amount <= 0) {
         snprintf(resp_msg, resp_sz, "Withdrawal amount must be positive.");
@@ -128,17 +118,12 @@ int withdraw_money(uint32_t user_id, double amount, char *resp_msg, size_t resp_
     }
 
     txn_data_t data = {amount};
-
-    // This function automatically inherits the new RECORD locking
     if (atomic_update_account(user_id, withdraw_modifier, &data)) {
-        // Log transaction
         txn_rec_t tx = {0, user_id, 0, amount, time(NULL), "withdraw"};
         append_transaction(&tx);
         snprintf(resp_msg, resp_sz, "Withdrawal Successful: %.2lf", amount);
         return 1;
     }
-    
-    // Check specific failure reason for better user feedback
     account_rec_t acc;
     if (!read_account(user_id, &acc)) snprintf(resp_msg, resp_sz, "Withdrawal Failed: Account not found");
     else if (acc.active == STATUS_INACTIVE) snprintf(resp_msg, resp_sz, "Withdrawal Failed: Account is inactive");
@@ -147,6 +132,7 @@ int withdraw_money(uint32_t user_id, double amount, char *resp_msg, size_t resp_
     return 0;
 }
 
+// transfer_funds (CRITICAL: Multi-step ACID Operation with Rollback)
 int transfer_funds(uint32_t from_id, uint32_t to_id, double amount, char *resp_msg, size_t resp_sz) {
     if (from_id == to_id) {
          snprintf(resp_msg, resp_sz, "Cannot transfer to the same account.");
@@ -182,7 +168,6 @@ int transfer_funds(uint32_t from_id, uint32_t to_id, double amount, char *resp_m
     // 3. Attempt to deposit to receiver (This is now RECORD locked)
     if (!atomic_update_account(to_id, deposit_modifier, &deposit_data)) {
         snprintf(resp_msg, resp_sz, "CRITICAL ERROR: Transfer failed after withdrawal. Contact support.");
-        
         // Rollback: Deposit the money back to the sender
         atomic_update_account(from_id, deposit_modifier, &withdraw_data);
         return 0;
@@ -200,6 +185,7 @@ int transfer_funds(uint32_t from_id, uint32_t to_id, double amount, char *resp_m
     return 1;
 }
 
+// apply_loan (Atomic append)
 int apply_loan(uint32_t user_id, double amount, char *resp_msg, size_t resp_sz) {
     if (amount <= 0) {
         snprintf(resp_msg, resp_sz, "Loan amount must be positive.");
@@ -207,8 +193,6 @@ int apply_loan(uint32_t user_id, double amount, char *resp_msg, size_t resp_sz) 
     }
     
     loan_rec_t loan = {0, user_id, amount, LOAN_PENDING, 0, time(NULL), 0, ""};
-    
-    // This is an append-only operation, full-file-lock is fine.
     if(append_loan(&loan)) {
         snprintf(resp_msg, resp_sz, "Loan Application Submitted (ID: %llu)", (unsigned long long)loan.loan_id);
         return 1;
@@ -217,12 +201,12 @@ int apply_loan(uint32_t user_id, double amount, char *resp_msg, size_t resp_sz) 
     return 0;
 }
 
-//View Loan Status
+// view_loan_status (Read-only list)
 int view_loan_status(uint32_t user_id, char *resp_msg, size_t resp_sz) {
     int fd = open(LOANS_DB_FILE, O_RDONLY);
     if(fd < 0) { snprintf(resp_msg, resp_sz, "No loan records found"); return 0; }
     
-    lock_file(fd); // Full file lock is fine for read-only list
+    lock_file(fd); 
     loan_rec_t loan;
     char tmp[512]; 
     resp_msg[0] = '\0'; 
@@ -249,12 +233,10 @@ int view_loan_status(uint32_t user_id, char *resp_msg, size_t resp_sz) {
     return 1;
 }
 
-//Add Feedback
+// add_feedback (Atomic append)
 int add_feedback(uint32_t user_id, const char *msg, char *resp_msg, size_t resp_sz) {
     feedback_rec_t fb = {0, user_id, "", 0, "", time(NULL)};
     strncpy(fb.message, msg, sizeof(fb.message) - 1);
-    
-    // Append-only, full-file-lock is fine
     if(append_feedback(&fb)) {
         snprintf(resp_msg, resp_sz, "Feedback Submitted (ID: %llu). Thank you!", (unsigned long long)fb.fb_id);
         return 1;
@@ -263,12 +245,12 @@ int add_feedback(uint32_t user_id, const char *msg, char *resp_msg, size_t resp_
     return 0;
 }
 
-//View Feedback Status
+// view_feedback_status (Read-only list)
 int view_feedback_status(uint32_t user_id, char *resp_msg, size_t resp_sz) {
     int fd = open(FEEDBACK_DB_FILE, O_RDONLY);
     if(fd < 0) { snprintf(resp_msg, resp_sz, "No feedback records found"); return 0; }
     
-    lock_file(fd); // Full file lock is fine for read-only list
+    lock_file(fd); 
     feedback_rec_t fb;
     char tmp[512]; 
     resp_msg[0] = '\0';
@@ -294,7 +276,7 @@ int view_feedback_status(uint32_t user_id, char *resp_msg, size_t resp_sz) {
     return 1;
 }
 
-// NEW FEATURE: View Transaction History
+// view_transaction_history (Read-only list, reads backward)
 int view_transaction_history(uint32_t user_id, char *resp_msg, size_t resp_sz) {
     int fd = open(TRANSACTIONS_DB_FILE, O_RDONLY);
     if(fd < 0) { snprintf(resp_msg, resp_sz, "No transaction history found"); return 0; }

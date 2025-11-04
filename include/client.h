@@ -10,6 +10,7 @@
 #include <arpa/inet.h>
 #include "server.h" 
 
+/* --- CLIENT INTERFACE (I/O & Network Abstraction) --- */
 void connect_to_server(const char *ip);
 void send_request_and_get_response(int sockfd, request_t *req, response_t *resp);
 void customer_menu(int userId, int sockfd, const char* userName);

@@ -7,16 +7,17 @@
 #include <unistd.h> 
 #include <fcntl.h> 
 
-// --- Modifier for set_account_status ---
+/* --- MANAGER MODULE LOGIC (Oversight/Approvals) --- */
+
+// Modifier for set_account_status (Atomic update logic)
 int set_status_modifier(account_rec_t *acc, void *data) {
     int new_status = *(int*)data;
     acc->active = (new_status == 1) ? STATUS_ACTIVE : STATUS_INACTIVE;
     return 1; // Always succeed
 }
 
-// --- REFACTORED set_account_status ---
+// set_account_status (Atomic change of account active status)
 int set_account_status(uint32_t custId, int status, char *resp_msg, size_t resp_sz) {
-    // This was a race condition in your original code. Now it's atomic.
     if (atomic_update_account(custId, set_status_modifier, &status)) {
          snprintf(resp_msg, resp_sz, "Account %u Status Updated to: %s", custId, (status == 1) ? "ACTIVE" : "INACTIVE");
          return 1;
@@ -27,7 +28,7 @@ int set_account_status(uint32_t custId, int status, char *resp_msg, size_t resp_
 }
 
 
-// --- Modifier for assign_loan_to_employee ---
+/* --- Modifier for assign_loan_to_employee (Atomic Loan Update Logic) --- */
 typedef struct {
     uint32_t empId;
     char *resp_msg;
@@ -39,29 +40,30 @@ int assign_loan_modifier(loan_rec_t *loan, void *data) {
 
     if (loan->status != LOAN_PENDING) {
         snprintf(d->resp_msg, d->resp_sz, "Loan is not pending, cannot assign."); 
-        return 0; // Abort modification
+        return 0; 
     }
     
-    // Check if empId is a valid employee
+    // Consistency Check: Validate employee role/existence
     user_rec_t emp;
     if(!read_user(d->empId, &emp) || emp.role != ROLE_EMPLOYEE) {
         snprintf(d->resp_msg, d->resp_sz, "Employee ID %u not found or is not an employee.", d->empId); 
         return 0; // Abort modification
     }
 
+    // Modify loan record
     loan->assigned_to = d->empId;
-    loan->status = LOAN_ASSIGNED; // Update status
+    loan->status = LOAN_ASSIGNED; 
     
     snprintf(d->resp_msg, d->resp_sz, "Loan %llu Assigned to Employee %u", (unsigned long long)loan->loan_id, d->empId);
-    return 1; // Commit modification
+    return 1; 
 }
 
-// --- REFACTORED assign_loan_to_employee ---
+// assign_loan_to_employee (Wrapper for atomic loan update)
 int assign_loan_to_employee(uint32_t loanId, uint32_t empId, char *resp_msg, size_t resp_sz) {
     assign_loan_data data = {empId, resp_msg, resp_sz};
     
     if (atomic_update_loan(loanId, assign_loan_modifier, &data)) {
-        return 1; // Success, resp_msg was set by modifier
+        return 1; 
     }
     
     if (resp_msg[0] == '\0') {
@@ -70,10 +72,7 @@ int assign_loan_to_employee(uint32_t loanId, uint32_t empId, char *resp_msg, siz
     return 0;
 }
 
-
-// --- (Other functions remain the same) ---
-
-// This function is safe (read-only list)
+// view_non_assigned_loans (Read-only list)
 int view_non_assigned_loans(char *resp_msg, size_t resp_sz) {
     int fd = open(LOANS_DB_FILE,O_RDONLY);
     if(fd<0) { snprintf(resp_msg,resp_sz,"No loans file found"); return 0; }
@@ -105,7 +104,7 @@ int view_non_assigned_loans(char *resp_msg, size_t resp_sz) {
     return 1;
 }
 
-// This function is safe (already atomic)
+// review_feedbacks (CRITICAL: Batch Update, uses full-file lock)
 int review_feedbacks(char *resp_msg, size_t resp_sz) {
     int fd = open(FEEDBACK_DB_FILE,O_RDWR);
     if(fd<0) { snprintf(resp_msg,resp_sz,"No feedback file found"); return 0; }

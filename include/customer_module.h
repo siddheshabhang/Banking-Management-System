@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include "server.h" 
 
+/* --- CUSTOMER MODULE INTERFACE (Atomic financial operations) --- */
 int view_balance(uint32_t user_id, char *resp_msg, size_t resp_sz);
 int deposit_money(uint32_t user_id, double amount, char *resp_msg, size_t resp_sz);
 int withdraw_money(uint32_t user_id, double amount, char *resp_msg, size_t resp_sz);
