@@ -4,12 +4,17 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include "client.h"
-#include "server.h" // For request_t, response_t, and constants
-#include <ctype.h>  // For isdigit
-#include <stdbool.h> // For bool
+#include "server.h" 
+#include <ctype.h> 
+#include <stdbool.h> 
 
-// Helper to send request and get response
-// CRITICAL FIX: This now sends/receives the correct structs
+// --- Network Utility ---
+
+/*
+ * send_request_and_get_response
+ * Handles the two-way communication with the server for a single request.
+ * Manages connection error detection.
+ */
 void send_request_and_get_response(int sockfd, request_t *req, response_t *resp) {
     if (write(sockfd, req, sizeof(request_t)) <= 0) {
         perror("write");
@@ -26,32 +31,44 @@ void send_request_and_get_response(int sockfd, request_t *req, response_t *resp)
     }
 }
 
-// Helper to clear stdin buffer
+// --- Input Handling Utilities ---
+
+/*
+ * clear_stdin
+ * Clears the input buffer to prevent leftover newlines from breaking scanf.
+ */
 void clear_stdin() {
     int c;
     while ((c = getchar()) != '\n' && c != EOF);
 }
 
-/* --- VALIDATION HELPERS --- */
-// Generic function to read a validated string
-// Loops until input is valid
-void read_validated_string(const char* prompt, char* buffer, int size, 
-                           bool (*validator)(const char*, char*, size_t)) {
+// --- SECTION: Robust Input Validation ---
+
+/*
+ * read_validated_string
+ * This is a generic, looping prompt that forces user input to pass a
+ * specific validator function, which is passed as a function pointer.
+ * This makes the input validation system clean and reusable.
+ */
+void read_validated_string(const char* prompt, char* buffer, int size, bool (*validator)(const char*, char*, size_t)) {
     char error_msg[128] = {0};
     while (true) {
         printf("%s: ", prompt);
         fgets(buffer, size, stdin);
-        buffer[strcspn(buffer, "\n")] = 0; // Remove trailing newline
+        buffer[strcspn(buffer, "\n")] = 0; 
 
         if (validator(buffer, error_msg, sizeof(error_msg))) {
-            break; // Success
+            break; 
         } else {
             printf("Error: %s. Please try again.\n", error_msg);
         }
     }
 }
 
-// Validator for non-empty strings
+/*
+ * validate_not_empty
+ * Validator: Ensures the input string is not empty.
+ */
 bool validate_not_empty(const char* input, char* error_msg, size_t err_sz) {
     if (input[0] == '\0') {
         snprintf(error_msg, err_sz, "Input cannot be empty");
@@ -60,10 +77,13 @@ bool validate_not_empty(const char* input, char* error_msg, size_t err_sz) {
     return true;
 }
 
-// Validator for name parts (non-empty, no spaces, < MAX_FNAME_LEN)
+/*
+ * validate_name_part
+ * Validator: Ensures name is not empty, not too long, and has no spaces.
+ */
 bool validate_name_part(const char* input, char* error_msg, size_t err_sz) {
     if (!validate_not_empty(input, error_msg, err_sz)) return false;
-    if (strlen(input) >= MAX_FNAME_LEN) { // Use MAX_FNAME_LEN (64)
+    if (strlen(input) >= MAX_FNAME_LEN) { 
         snprintf(error_msg, err_sz, "Input too long (max %d)", MAX_FNAME_LEN - 1);
         return false;
     }
@@ -74,7 +94,10 @@ bool validate_name_part(const char* input, char* error_msg, size_t err_sz) {
     return true;
 }
 
-// Validator for address (non-empty, no spaces, < MAX_ADDR_LEN)
+/*
+ * validate_address
+ * Validator: Ensures address is not empty, not too long, and has no spaces.
+ */
 bool validate_address(const char* input, char* error_msg, size_t err_sz) {
     if (!validate_not_empty(input, error_msg, err_sz)) return false;
     if (strlen(input) >= MAX_ADDR_LEN) {
@@ -88,7 +111,10 @@ bool validate_address(const char* input, char* error_msg, size_t err_sz) {
     return true;
 }
 
-// Validator for email (non-empty, < MAX_EMAIL_LEN, must have @ and .) [cite: 1]
+/*
+ * validate_email
+ * Validator: Ensures email is not empty, not too long, and has '@' and '.'.
+ */
 bool validate_email(const char* input, char* error_msg, size_t err_sz) {
     if (!validate_not_empty(input, error_msg, err_sz)) return false;
     if (strlen(input) >= MAX_EMAIL_LEN) {
@@ -102,7 +128,10 @@ bool validate_email(const char* input, char* error_msg, size_t err_sz) {
     return true;
 }
 
-// Validator for phone (non-empty, < MAX_PHONE_LEN, 10 digits) [cite: 1]
+/*
+ * validate_phone
+ * Validator: Ensures phone is not empty, exactly 10 digits, and all digits.
+ */
 bool validate_phone(const char* input, char* error_msg, size_t err_sz) {
     if (!validate_not_empty(input, error_msg, err_sz)) return false;
     if (strlen(input) != 10) {
@@ -118,7 +147,10 @@ bool validate_phone(const char* input, char* error_msg, size_t err_sz) {
     return true;
 }
 
-// Validator for username/password (non-empty, no spaces)
+/*
+ * validate_credential
+ * Validator: Ensures username/password is not empty, not too long, no spaces.
+ */
 bool validate_credential(const char* input, char* error_msg, size_t err_sz) {
     if (!validate_not_empty(input, error_msg, err_sz)) return false;
     if (strlen(input) >= MAX_USERNAME_LEN) { // Use larger of user/pass
@@ -132,14 +164,18 @@ bool validate_credential(const char* input, char* error_msg, size_t err_sz) {
     return true;
 }
 
-// Helper to read a valid double (for deposit/withdraw) [cite: 1]
+/*
+ * read_valid_double
+ * Helper to read a valid, positive monetary amount.
+ * Loops until input is valid.
+ */
 double read_valid_double(const char* prompt) {
     char buffer[128];
     char error_msg[128];
     while (true) {
         printf("%s: ", prompt);
         fgets(buffer, sizeof(buffer), stdin);
-        buffer[strcspn(buffer, "\n")] = 0; // Remove newline
+        buffer[strcspn(buffer, "\n")] = 0; 
         
         if (buffer[0] == '\0') {
             printf("Error: Input cannot be empty. Please try again.\n");
@@ -149,18 +185,22 @@ double read_valid_double(const char* prompt) {
         char* endptr;
         double value = strtod(buffer, &endptr);
 
-        // Check if conversion failed or if there are trailing non-numeric chars
         if (endptr == buffer || *endptr != '\0') {
             printf("Error: Invalid number. Please enter digits only (e.g., 100.50).\n");
         } else if (value <= 0) {
             printf("Error: Amount must be positive. Please try again.\n");
         } else {
-            return value; // Success
+            return value; 
         }
     }
 }
 
-// Customer Menu
+// --- SECTION: Role-Based Menus ---
+
+/*
+ * customer_menu
+ * Displays the main menu and handles I/O for the Customer role.
+ */
 void customer_menu(int userId, int sockfd, const char* userName) {
     int choice;
     request_t req;
@@ -181,7 +221,7 @@ void customer_menu(int userId, int sockfd, const char* userName) {
             printf("Invalid input. Please enter a number.\n");
             continue;
         }
-        clear_stdin(); // clear newline
+        clear_stdin(); 
 
         memset(&req, 0, sizeof(req));
         memset(&resp, 0, sizeof(resp));
@@ -272,12 +312,15 @@ void customer_menu(int userId, int sockfd, const char* userName) {
         send_request_and_get_response(sockfd, &req, &resp);
         printf("\n--- Server Response ---\n%s\n-----------------------\n", resp.message);
 
-        if (resp.status_code == -1) return; // Server connection lost
-        if (choice == 12) return; // Logout
+        if (resp.status_code == -1) return; 
+        if (choice == 12) return; 
     }
 }
 
-// Employee Menu
+/*
+ * employee_menu
+ * Displays the main menu and handles I/O for the Employee role.
+ */
 void employee_menu(int userId, int sockfd, const char* userName) {
     int choice;
     request_t req;
@@ -383,7 +426,6 @@ void employee_menu(int userId, int sockfd, const char* userName) {
                     } else {
                         custId = atoi(acct_str);
                     }
-                    clear_stdin();
                     strcpy(req.op, "VIEW_CUST_TRANSACTIONS");
                     snprintf(req.payload, sizeof(req.payload), "%u", custId);
                 }
@@ -412,7 +454,10 @@ void employee_menu(int userId, int sockfd, const char* userName) {
     }
 }
 
-// Manager Menu
+/*
+ * manager_menu
+ * Displays the main menu and handles I/O for the Manager role.
+ */
 void manager_menu(int userId, int sockfd, const char* userName) {
     int choice;
     request_t req;
@@ -491,12 +536,15 @@ void manager_menu(int userId, int sockfd, const char* userName) {
         send_request_and_get_response(sockfd, &req, &resp);
         printf("\n--- Server Response ---\n%s\n-----------------------\n", resp.message);
 
-        if (resp.status_code == -1) return; // Server connection lost
-        if (choice == 6) return; // Logout
+        if (resp.status_code == -1) return; 
+        if (choice == 6) return; 
     }
 }
 
-// Admin Menu
+/*
+ * admin_menu
+ * Displays the main menu and handles I/O for the Admin role.
+ */
 void admin_menu(int userId, int sockfd, const char* userName) {
     int choice;
     request_t req;
@@ -532,10 +580,10 @@ void admin_menu(int userId, int sockfd, const char* userName) {
                     scanf("%d", &age);
                     clear_stdin();
                     read_validated_string("Enter address (no spaces, use '_')", address, sizeof(address), validate_address);
-                    read_validated_string("Enter role (employee/manager/admin)", role, sizeof(role), validate_credential);
+                    read_validated_string("Enter role (employee/manager)", role, sizeof(role), validate_credential);
                     if(strcmp(role, "customer"))
                     {
-                        printf("Error: Invalid role for employee. Must be 'employee', 'manager', or 'admin'.\n");
+                        printf("Error: Invalid role for employee. Must be 'employee' or 'manager'.\n");
                         continue;
                     }
                     read_validated_string("Enter email", email, sizeof(email), validate_email);
@@ -553,7 +601,6 @@ void admin_menu(int userId, int sockfd, const char* userName) {
                     char fname[MAX_FNAME_LEN], lname[MAX_LNAME_LEN], address[MAX_ADDR_LEN], email[MAX_EMAIL_LEN], phone[MAX_PHONE_LEN];
                     int age;
                     printf("Enter user ID to modify: ");
-                    scanf("%d", &targetId);
                     scanf("%d", &targetId);
                     clear_stdin();
                     read_validated_string("Enter new first name (no spaces)", fname, sizeof(fname), validate_name_part);
@@ -573,25 +620,22 @@ void admin_menu(int userId, int sockfd, const char* userName) {
                 {
                     printf("Fetching user list...\n");
                     strcpy(req.op, "LIST_USERS");
-                    req.payload[0] = '\0'; // No payload needed
+                    req.payload[0] = '\0'; 
                     
                     send_request_and_get_response(sockfd, &req, &resp);
-                    
-                    // Print the list received from the server
+                
                     printf("\n--- Server Response ---\n%s\n-----------------------\n", resp.message);
                     
                     if (resp.status_code != 0) {
-                        // If fetching list failed, don't continue to the next step
-                        continue; // Go back to menu
+                        continue; 
                     }
                     int targetId;
                     char role[MAX_ROLE_STR];
                     printf("Enter user ID to change role: ");
                     scanf("%d", &targetId);
                     clear_stdin();
-                    read_validated_string("Enter new role (customer/employee/manager/admin)", role, sizeof(role), validate_credential);
+                    read_validated_string("Enter new role (employee/manager)", role, sizeof(role), validate_credential);
                     
-                    // Reset req struct for the *next* operation
                     memset(&req, 0, sizeof(req)); 
                     strcpy(req.op, "CHANGE_ROLE");
                     snprintf(req.payload, sizeof(req.payload), "%u %s", targetId, role);
@@ -621,7 +665,11 @@ void admin_menu(int userId, int sockfd, const char* userName) {
     }
 }
 
-// Main function
+/*
+ * main
+ * Entry point for the client executable.
+ * Handles connection and the main login/role-selection loop.
+ */
 int main(int argc, char *argv[]) {
     if(argc != 2) {
         printf("Usage: %s <server-ip>\n", argv[0]);
@@ -637,6 +685,7 @@ int main(int argc, char *argv[]) {
     
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_port = htons(DEFAULT_PORT);
+    
     if(inet_pton(AF_INET, argv[1], &serv_addr.sin_addr) <= 0) {
         perror("inet_pton");
         exit(EXIT_FAILURE);
@@ -651,13 +700,11 @@ int main(int argc, char *argv[]) {
     printf("Connected to server at %s\n", argv[1]);
 
     while(1) {
-        int userId = 0; // Initialize userId outside the loop
+        int userId = 0; 
         char role[MAX_ROLE_STR] = {0};
-        char name[MAX_FNAME_LEN] = {0}; // Will hold first name
+        char name[MAX_FNAME_LEN] = {0}; 
         request_t req;
         response_t resp;
-
-        // --- Role Selection and Login Loop ---
         while (userId == 0) {
             printf("\n==================================\n");
             printf("Please select your role to login:\n");
@@ -682,22 +729,17 @@ int main(int argc, char *argv[]) {
                 return 0;
             }
             
-            // --- Standard Login Prompt ---
             char username[MAX_USERNAME_LEN], password[MAX_PASSWORD_LEN];
             read_validated_string("Username", username, sizeof(username), validate_credential);
             read_validated_string("Password", password, sizeof(password), validate_credential);
-
-            // Prepare LOGIN Request
             memset(&req, 0, sizeof(req));
             strcpy(req.op, "LOGIN");
             snprintf(req.payload, sizeof(req.payload), "%s %s", username, password);
             
             send_request_and_get_response(sockfd, &req, &resp);
 
-            // Check Server Response and Validate Role
             if (sscanf(resp.message, "SUCCESS %d %[^|]|%[^\n]", &userId, role, name) == 3) {
                 
-                // Check if the role matches the selected choice (optional but good practice)
                 int valid_role = 0;
                 if (choice == 1 && strcmp(role, "customer") == 0) valid_role = 1;
                 if (choice == 2 && strcmp(role, "employee") == 0) valid_role = 1;
@@ -706,25 +748,25 @@ int main(int argc, char *argv[]) {
 
                 if (valid_role) {
                     printf("\n==================================\n");
-                    printf("Login successful! Welcome, %s!\n", name); // <-- WELCOME MESSAGE
+                    printf("Login successful! Welcome, %s!\n", name); 
                     
-                    if(choice == 1) { // If they are a customer
-                        printf("Account Number: AC%d\n", userId); // <-- ACCOUNT NUMBER
+                    if(choice == 1) { 
+                        printf("Account Number: AC%d\n", userId); 
                     }
                     printf("==================================\n");
                     break;
                 } else {
                     printf("Login failed: Credentials are valid, but the role '%s' does not match selection.\n", role);
-                    userId = 0; // Reset to force re-login
+                    userId = 0; 
                 }
 
             } else {
                 printf("Login failed: %s\n", resp.message);
-                userId = 0; // Keep looping
+                userId = 0; 
             }
-        } // End of while (userId == 0) loop
+        } 
 
-        // --- Role-Specific Menu Dispatch (Starts here) ---
+        // --- Role-Specific Menu Dispatch ---
         if (userId != 0) {
             if(strcmp(role, "customer") == 0) customer_menu(userId, sockfd, name);
             else if(strcmp(role, "employee") == 0) employee_menu(userId, sockfd, name);

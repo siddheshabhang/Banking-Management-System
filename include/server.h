@@ -43,6 +43,12 @@ typedef enum {
     STATUS_INACTIVE = 0,
     STATUS_ACTIVE = 1
 } status_t;
+typedef enum { 
+    LOAN_PENDING=0, 
+    LOAN_ASSIGNED, 
+    LOAN_APPROVED, 
+    LOAN_REJECTED 
+} loan_status_t;
 typedef struct {
     uint32_t user_id;                         
     char username[MAX_USERNAME_LEN];          
@@ -71,8 +77,6 @@ typedef struct {
     time_t timestamp;
     char narration[128];
 } txn_rec_t;
-
-typedef enum { LOAN_PENDING=0, LOAN_ASSIGNED, LOAN_APPROVED, LOAN_REJECTED } loan_status_t;
 typedef struct {
     uint64_t loan_id;
     uint32_t user_id;

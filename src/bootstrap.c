@@ -1,20 +1,17 @@
-#include "admin_module.h" // Needed for Admin/Staff creation
-#include "employee_module.h" // Needed for Customer creation (since employee handles it)
-#include "utils.h"        
+//=============================================================================
+// bootstrap.c --> Bootstrapping initial staff and customers for the Banking Management System
+//=============================================================================
+#include "admin_module.h" 
+#include "employee_module.h" 
+#include "server.h"       
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>     
 #include <errno.h>
 
-/*
- * This program runs ONCE to create the first admin user, plus one of each other role.
- * NOTE: Address fields cannot contain spaces. Use underscores.
- */
 int main() {
     printf("Bootstrapping system with initial staff and customers...\n");
-    
-    // Ensure the db directory exists
-    // DB_DIR is defined in server.h, which is included via utils.h
+    // Ensure the db directory exists. DB_DIR is defined in server.h
     if (mkdir(DB_DIR, 0700) == -1 && errno != EEXIST) {
         perror("Failed to create db directory");
         return 1;
@@ -22,8 +19,8 @@ int main() {
         printf("db directory ensured.\n");
     }
     
-    char resp_msg[MAX_MSG_LEN];
-    int success_count = 0;
+    char resp_msg[MAX_MSG_LEN];   // Response message buffer (describing what happened (success/failure, reason, etc.))
+    int success_count = 0;      // Count of successfully created users
 
     // --- 1. ADMIN USER (Siddhesh Abhang, ID: 1001) ---
     printf("\n--- Creating ADMIN (Siddhesh Abhang) ---\n");
@@ -77,7 +74,7 @@ int main() {
     strncpy(cust1_user.email, "priya@guest.com", sizeof(cust1_user.email) - 1);
     strncpy(cust1_user.phone, "9000000001", sizeof(cust1_user.phone) - 1);
     
-    if (add_new_customer(&cust1_user, &cust1_acc, "priya", "customerpass", resp_msg, sizeof(resp_msg))) {
+    if (add_new_customer(&cust1_user, &cust1_acc, "priya", "priyapass", resp_msg, sizeof(resp_msg))) {
         printf("SUCCESS: %s\n", resp_msg);
         success_count++;
     } else {
@@ -96,15 +93,12 @@ int main() {
     strncpy(cust2_user.email, "rohan@guest.com", sizeof(cust2_user.email) - 1);
     strncpy(cust2_user.phone, "9000000002", sizeof(cust2_user.phone) - 1);
     
-    if (add_new_customer(&cust2_user, &cust2_acc, "rohan", "customerpass", resp_msg, sizeof(resp_msg))) {
+    if (add_new_customer(&cust2_user, &cust2_acc, "rohan", "rohanpass", resp_msg, sizeof(resp_msg))) {
         printf("SUCCESS: %s\n", resp_msg);
         success_count++;
     } else {
         fprintf(stderr, "FAILURE: %s\n", resp_msg);
     }
-
-    // --- CUSTOMER 3 (Ajit Kale) --- [REMOVED]
-    // --- CUSTOMER 4 (Vamsi Krishna) --- [REMOVED]
 
     printf("\n--- Bootstrapping Complete ---\n");
     printf("%d out of 6 initial users successfully created.\n", success_count);

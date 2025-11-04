@@ -3,9 +3,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <stddef.h>
-#include <time.h>   // <-- Added missing include for time()
-#include <fcntl.h>  // <-- Added missing include for O_RDONLY
-#include <unistd.h> // <-- Added missing include for lseek/read
+#include <time.h>   
+#include <fcntl.h>  
+#include <unistd.h> 
 
 // --- Prototype for the function defined in customer_module.c ---
 int deposit_modifier(account_rec_t *acc, void *data);
@@ -30,7 +30,7 @@ int approve_reject_loan_modifier(loan_rec_t *loan, void *data) {
 
     if(loan->status != LOAN_ASSIGNED) {
         snprintf(d->resp_msg, d->resp_sz, "Loan not assigned to an employee or already processed.");
-        return 0; // Abort
+        return 0; 
     }
     if(loan->assigned_to != d->emp_id) {
          snprintf(d->resp_msg, d->resp_sz, "Loan not assigned to you.");
@@ -148,7 +148,7 @@ int modify_customer(uint32_t user_id, const char *first_name, const char *last_n
 // This function is safe, as it appends new records using full-file-lock functions
 int add_new_customer(user_rec_t *user, account_rec_t *acc, const char *username, const char *password, char *resp_msg, size_t resp_sz) {
     if (!check_uniqueness(username, user->email, user->phone, 0, resp_msg, resp_sz)) {
-        return 0; // Fail, resp_msg is set by check_uniqueness
+        return 0;   // Fail, resp_msg is set by check_uniqueness
     }
     user->user_id = generate_new_userId();
     user->role = ROLE_CUSTOMER;
@@ -162,7 +162,6 @@ int add_new_customer(user_rec_t *user, account_rec_t *acc, const char *username,
     acc->account_id = user->user_id; 
     acc->balance = 0;
     acc->active = STATUS_ACTIVE;
-    // acc->created_at = time(NULL); // <-- THIS LINE WAS THE ERROR. It is now removed.
     
     if (write_user(user) && write_account(acc)) {
         snprintf(resp_msg, resp_sz, "Customer Added (ID: %u, Username: %s)", user->user_id, user->username);
@@ -237,7 +236,6 @@ int process_loans(char *resp_msg, size_t resp_sz) {
     return 1;
 }
 
-// This function is safe (read-only list)
 int view_customer_transactions(uint32_t custId, char *resp_msg, size_t resp_sz) {
     
     user_rec_t user;
@@ -263,29 +261,38 @@ int view_customer_transactions(uint32_t custId, char *resp_msg, size_t resp_sz) 
     while(offset >= 0) {
         if(read(fd, &tx, sizeof(txn_rec_t)) != sizeof(txn_rec_t)) break;
         
-        if(tx.from_account == custId || tx.to_account == custId) {
+       char time_str[64];
+        struct tm *tm_info = localtime(&tx.timestamp);
+        strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", tm_info);
+        
+        char type_str[16];
+        uint32_t other_id = 0;
+        int tx_is_relevant = 0;
+
+        if (strcmp(tx.narration, "deposit") == 0 && tx.to_account == custId) {
+            strcpy(type_str, "DEPOSIT");
+            other_id = tx.from_account;
+            tx_is_relevant = 1;
+        } else if (strcmp(tx.narration, "withdraw") == 0 && tx.from_account == custId) {
+            strcpy(type_str, "WITHDRAW");
+            other_id = tx.to_account;
+            tx_is_relevant = 1;
+        } else if (strcmp(tx.narration, "transfer_out") == 0 && tx.from_account == custId) {
+            strcpy(type_str, "TRANSFER_OUT");
+            other_id = tx.to_account;
+            tx_is_relevant = 1;
+        } else if (strcmp(tx.narration, "transfer_in") == 0 && tx.to_account == custId) {
+            strcpy(type_str, "TRANSFER_IN");
+            other_id = tx.from_account;
+            tx_is_relevant = 1;
+        } else if (strcmp(tx.narration, "loan_deposit") == 0 && tx.to_account == custId) {
+            strcpy(type_str, "LOAN_DEPOSIT");
+            other_id = 0; 
+            tx_is_relevant = 1;
+        }
+
+        if(tx_is_relevant) {
             found = 1;
-            char time_str[64];
-            struct tm *tm_info = localtime(&tx.timestamp);
-            strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", tm_info);
-            
-            char type_str[16];
-            uint32_t other_id = 0;
-
-            if (strcmp(tx.narration, "deposit") == 0) {
-                strcpy(type_str, "DEPOSIT");
-                other_id = tx.from_account;
-            } else if (strcmp(tx.narration, "withdraw") == 0) {
-                strcpy(type_str, "WITHDRAW");
-                other_id = tx.to_account;
-            } else if (strcmp(tx.narration, "transfer_out") == 0) {
-                strcpy(type_str, "TRANSFER_OUT");
-                other_id = tx.to_account;
-            } else if (strcmp(tx.narration, "transfer_in") == 0) {
-                strcpy(type_str, "TRANSFER_IN");
-                other_id = tx.from_account;
-            }
-
             snprintf(tmp, sizeof(tmp), "%-11s | %-8.2f | %-10u | %s\n",
                      type_str, tx.amount, other_id, time_str);
             strncat(resp_msg, tmp, resp_sz - strlen(resp_msg) - 1);

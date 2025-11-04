@@ -5,8 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-static const char *get_role_str_for_list(role_t role)
-{
+// --- Helper to convert role_t to string for listing ---
+static const char *get_role_str_for_list(role_t role) {
     switch (role)
     {
     case ROLE_CUSTOMER:
@@ -35,12 +35,13 @@ typedef struct
     size_t resp_sz;
 } modify_user_data;
 
+// --- REFACTORED modify_user ---
 int modify_user_modifier(user_rec_t *user, void *data)
 {
     modify_user_data *d = (modify_user_data *)data;
     if (!check_uniqueness(user->username, d->email, d->phone, user->user_id, d->resp_msg, d->resp_sz))
     {
-        return 0; // Abort, resp_msg already set by check_uniqueness
+        return 0; 
     }
     strncpy(user->first_name, d->first_name, sizeof(user->first_name) - 1);
     strncpy(user->last_name, d->last_name, sizeof(user->last_name) - 1);
@@ -48,12 +49,10 @@ int modify_user_modifier(user_rec_t *user, void *data)
     strncpy(user->address, d->address, sizeof(user->address) - 1);
     strncpy(user->email, d->email, sizeof(user->email) - 1);
     strncpy(user->phone, d->phone, sizeof(user->phone) - 1);
-
     snprintf(d->resp_msg, d->resp_sz, "User Modified (ID: %u).\nNew Details:\nName: %s %s\nAge: %d\nAddress: %s\nEmail: %s\nPhone: %s", user->user_id, user->first_name, user->last_name, user->age, user->address, user->email, user->phone);
-    return 1; // Commit
+    return 1; 
 }
 
-// --- REFACTORED modify_user ---
 int modify_user(uint32_t userId, const char *first_name, const char *last_name, int age, const char *address, const char *email, const char *phone, char *resp_msg, size_t resp_sz)
 {
     modify_user_data data = {first_name, last_name, age, address, email, phone, resp_msg, resp_sz};
@@ -75,31 +74,34 @@ typedef struct
     size_t resp_sz;
 } change_role_data;
 
+// --- REFACTORED change_user_role ---
 int change_role_modifier(user_rec_t *user, void *data)
 {
     change_role_data *d = (change_role_data *)data;
-
+    if (user->role == ROLE_CUSTOMER) {
+         snprintf(d->resp_msg, d->resp_sz, "Error: Cannot change the role of a customer user.");
+         return 0; 
+    }
+    if (user->role == ROLE_ADMIN) {
+         snprintf(d->resp_msg, d->resp_sz, "Error: Cannot modify the role of an Administrator (ID: %u).", user->user_id);
+         return 0; 
+    }
     role_t new_role;
-    if (strcmp(d->role_str, "customer") == 0)
-        new_role = ROLE_CUSTOMER;
-    else if (strcmp(d->role_str, "employee") == 0)
+    if (strcmp(d->role_str, "employee") == 0)
         new_role = ROLE_EMPLOYEE;
     else if (strcmp(d->role_str, "manager") == 0)
         new_role = ROLE_MANAGER;
-    else if (strcmp(d->role_str, "admin") == 0)
-        new_role = ROLE_ADMIN;
     else
     {
-        snprintf(d->resp_msg, d->resp_sz, "Invalid role. Must be 'customer', 'employee', 'manager', or 'admin'.");
-        return 0; // Abort
+        snprintf(d->resp_msg, d->resp_sz, "Invalid role. Must be 'employee', or 'manager'.");
+        return 0; 
     }
 
     user->role = new_role;
     snprintf(d->resp_msg, d->resp_sz, "User %u Role Updated to %s", user->user_id, d->role_str);
-    return 1; // Commit
+    return 1; 
 }
 
-// --- REFACTORED change_user_role ---
 int change_user_role(uint32_t userId, const char *role_str, char *resp_msg, size_t resp_sz)
 {
     change_role_data data = {role_str, resp_msg, resp_sz};
@@ -116,17 +118,14 @@ int change_user_role(uint32_t userId, const char *role_str, char *resp_msg, size
     return 0;
 }
 
-// --- (Other functions remain the same) ---
-
-// This function is safe (append-only)
+// This function adds a new employee (employee or manager)
 int add_employee(const char *first_name, const char *last_name, int age, const char *address, const char *role_str, const char *email, const char *phone, const char *username, const char *password, char *resp_msg, size_t resp_sz)
 {
-    if (!check_uniqueness(username, email, phone, 0, resp_msg, resp_sz))
-    {             // [cite: 2]
-        return 0; // Fail, resp_msg is set by check_uniqueness
+    if (!check_uniqueness(username, email, phone, 0, resp_msg, resp_sz)) {     
+        return 0;   
     }
     user_rec_t user;
-    memset(&user, 0, sizeof(user_rec_t));
+    memset(&user, 0, sizeof(user_rec_t));       
 
     user.user_id = generate_new_userId();
     user.age = age;
@@ -148,7 +147,7 @@ int add_employee(const char *first_name, const char *last_name, int age, const c
         user.role = ROLE_ADMIN;
     else
     {
-        snprintf(resp_msg, resp_sz, "Invalid role. Must be 'employee', 'manager', or 'admin'.");
+        snprintf(resp_msg, resp_sz, "Invalid role. Must be 'employee' or 'manager'");
         return 0;
     }
 
@@ -164,7 +163,7 @@ int add_employee(const char *first_name, const char *last_name, int age, const c
     return 0;
 }
 
-// This function is safe (read-only list)
+// List all users except admins
 int list_all_users(char *resp_msg, size_t resp_sz)
 {
     int fd = open(USERS_DB_FILE, O_RDONLY);

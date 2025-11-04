@@ -76,13 +76,12 @@ static int unlock_record(int fd, long offset, size_t record_size) {
 
 // Generate hash of password
 void generate_password_hash(const char *password, char *hash_output, size_t hash_size) {
-    const char *salt = "$6$IIITB$"; // $6$ denotes SHA-512
+    const char *salt = "$6$IIITB$";        // $6$ denotes SHA-512
     char *hashed = crypt(password, salt);
     if (hashed) {
         strncpy(hash_output, hashed, hash_size - 1);
         hash_output[hash_size - 1] = '\0';
     } else {
-        // Fallback or error
         strncpy(hash_output, "HASH_FAILED", hash_size - 1);
     }
 }
@@ -200,7 +199,7 @@ int atomic_update_user(uint32_t userId, int (*modifier)(user_rec_t *user, void *
 static long find_account_offset(uint32_t userId) {
     int fd = open(ACCOUNTS_DB_FILE, O_RDONLY);
     if (fd < 0) return -1;
-    lock_file(fd); // Full file lock to safely search
+    lock_file(fd);          // Full file lock to safely search
     account_rec_t tmp;
     long current_offset = 0;
     long found_offset = -1;
@@ -219,13 +218,16 @@ static long find_account_offset(uint32_t userId) {
 // --- Atomic R-M-W for accounts.db ---
 int atomic_update_account(uint32_t userId, int (*modifier)(account_rec_t *acc, void *data), void *modifier_data) {
     long offset = find_account_offset(userId);
-    if (offset < 0) return 0; // Not found
+    if (offset < 0) 
+        return 0; 
     
     int fd = open(ACCOUNTS_DB_FILE, O_RDWR);
-    if (fd < 0) return 0;
+    if (fd < 0) 
+        return 0;
 
     if (lock_record(fd, offset, sizeof(account_rec_t)) != 0) {
-        close(fd); return 0; // Lock failed
+        close(fd); 
+        return 0;       // Lock failed
     }
 
     int success = 0;
@@ -239,8 +241,7 @@ int atomic_update_account(uint32_t userId, int (*modifier)(account_rec_t *acc, v
                 success = 1;
             }
         }
-    }
-
+    }   
     unlock_record(fd, offset, sizeof(account_rec_t));
     close(fd);
     return success;
@@ -543,29 +544,28 @@ int read_feedback(uint64_t fbId, feedback_rec_t *fb) {
 // Simple unique ID generation
 int generate_new_userId() {
     int fd = open(USERS_DB_FILE, O_RDONLY | O_CREAT, 0666);
-    if (fd < 0) return 1001; 
+    if (fd < 0) 
+        return 1001;    // Start from 1001 if file can't be opened
     lock_file(fd);
     int count = lseek(fd, 0, SEEK_END) / sizeof(user_rec_t);
     unlock_file(fd);
     close(fd);
-    return 1001 + count; // Start IDs from 1001
+    return 1001 + count;    // Start IDs from 1001
 }
 
-int check_uniqueness(const char* username, const char* email, const char* phone, 
-                     uint32_t current_user_id, char* resp_msg, size_t resp_sz) {
+int check_uniqueness(const char* username, const char* email, const char* phone, uint32_t current_user_id, char* resp_msg, size_t resp_sz) {
     int fd = open(USERS_DB_FILE, O_RDONLY);
-    if (fd < 0) {
-        // This is fine if the file doesn't exist yet (first user)
+    if (fd < 0) {   // Unable to open file, assume unique
         return 1;
     }
     
-    lock_file(fd); // Lock the file for a consistent read [cite: 3]
+    lock_file(fd);      // Lock the file for a consistent read
     user_rec_t user;
     int is_unique = 1;
 
     while (read(fd, &user, sizeof(user_rec_t)) == sizeof(user_rec_t)) {
         if (user.user_id == current_user_id) {
-            continue; // Skip self-check when modifying
+            continue;       // Skip self-check when modifying
         }
 
         if (strcmp(user.username, username) == 0) {
